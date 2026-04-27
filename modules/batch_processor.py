@@ -1085,13 +1085,18 @@ class BatchProcessor:
         if self.enable_spatial_tracking and self.spatial_tracker is not None:
             spatial_stats = self.spatial_tracker.get_spatial_statistics()
             zone_stats = self.spatial_tracker.get_zone_statistics()
+            zone_names = []
+            if getattr(self.spatial_tracker, "zone_model", None) is not None:
+                zone_names = self.spatial_tracker.zone_model.get_zone_names()
             
             chunk_stats['spatial'] = {
                 'calibration_valid': self.field_calibrator.has_valid_calibration(),
                 'possession_by_zone': spatial_stats.get('possession_by_zone', {}),
                 'zone_percentages': spatial_stats.get('zone_percentages', {}),
                 'zone_partition_type': zone_stats.get('partition_type', 'unknown'),
-                'num_zones': zone_stats.get('num_zones', 0)
+                'partition_type': zone_stats.get('partition_type', 'unknown'),
+                'num_zones': zone_stats.get('num_zones', 0),
+                'zone_names': zone_names
             }
             
             # No incluir heatmaps en chunk_stats (son muy grandes)
@@ -1113,7 +1118,13 @@ class BatchProcessor:
                 # Añadir estadísticas espaciales si están disponibles
                 spatial_stats_for_alerts = None
                 if self.enable_spatial_tracking and self.spatial_tracker is not None:
-                    spatial_stats_for_alerts = spatial_stats
+                    spatial_stats_for_alerts = {
+                        'possession_by_zone': spatial_stats.get('possession_by_zone', {}),
+                        'zone_percentages': spatial_stats.get('zone_percentages', {}),
+                        'partition_type': zone_stats.get('partition_type', 'unknown'),
+                        'num_zones': zone_stats.get('num_zones', 0),
+                        'zone_names': zone_names
+                    }
 
                     # Agregar eventos recientes para análisis táctico
                     # Mantener los últimos 10 eventos de pases

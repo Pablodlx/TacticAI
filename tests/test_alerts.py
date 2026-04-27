@@ -1,5 +1,6 @@
 """Tests unitarios del sistema de alertas tácticas."""
 import pytest
+import time
 
 # ---------------------------------------------------------------------------
 # MatchAlertSystem — imports ligeros, no necesita mock_modules
@@ -111,3 +112,101 @@ class TestMinAlertInterval:
             frame_id=CHECK_FRAME + 1, possession_stats=POSSESSION_DOM, spatial_stats={}
         )
         assert second == [], "Segunda llamada inmediata no deberia generar alertas"
+
+
+class TestSpatialAndRelevance:
+    def test_spatial_pressure_uses_zone_percentages_payload(self, alert_system):
+        """Debe detectar presión rival usando zone_percentages en thirds_lanes."""
+        alert_system.last_check_frame = 0
+        alert_system.last_summary_time = time.time()
+
+        spatial_stats = {
+            "partition_type": "thirds_lanes",
+            "num_zones": 9,
+            "zone_names": [
+                "def_left", "def_center", "def_right",
+                "mid_left", "mid_center", "mid_right",
+                "off_left", "off_center", "off_right",
+            ],
+            "zone_percentages": {
+                0: [34.0, 20.0, 16.0, 10.0, 8.0, 6.0, 2.0, 2.0, 2.0],
+                1: [3.0, 5.0, 7.0, 10.0, 12.0, 13.0, 20.0, 16.0, 14.0],
+            },
+            "possession_by_zone": {
+                0: [340, 200, 160, 100, 80, 60, 20, 20, 20],
+                1: [30, 50, 70, 100, 120, 130, 200, 160, 140],
+            }
+        }
+
+        alerts = alert_system.analyze_and_generate_alerts(
+            frame_id=CHECK_FRAME,
+            possession_stats=POSSESSION_DOM,
+            spatial_stats=spatial_stats,
+        )
+
+        zone_alerts = [a for a in alerts if a.type == "zone"]
+        assert zone_alerts, "Debe generar al menos una alerta zonal"
+
+    def test_selected_alerts_include_relevance_score(self, alert_system):
+        """Las alertas seleccionadas deben estar rankeadas con relevance_score."""
+        alert_system.last_check_frame = 0
+        alert_system.last_summary_time = time.time()
+
+        alerts = alert_system.analyze_and_generate_alerts(
+            frame_id=CHECK_FRAME,
+            possession_stats=POSSESSION_DOM,
+            spatial_stats={},
+        )
+
+        assert alerts, "Deben existir alertas para validar scoring"
+        assert len(alerts) <= alert_system.max_alerts_per_check
+        assert all('relevance_score' in a.data for a in alerts)
+
+    def test_predictive_alert_emits_probabilities_for_dangerous_zones(self, alert_system):
+        """Con fuerte presión ofensiva debe emitir alerta predictiva con probabilidades."""
+        alert_system.last_check_frame = 0
+        alert_system.last_summary_time = time.time()
+
+        possession_stats = {
+            "frames_by_team": {0: 720, 1: 280},
+            "passes_by_team": {0: 30, 1: 8},
+            "current_team": 0,
+            "possession_changes": 10,
+        }
+        spatial_stats = {
+            "partition_type": "thirds_lanes",
+            "num_zones": 9,
+            "zone_names": [
+                "def_left", "def_center", "def_right",
+                "mid_left", "mid_center", "mid_right",
+                "off_left", "off_center", "off_right",
+            ],
+            "zone_percentages": {
+                0: [6.0, 5.0, 4.0, 9.0, 10.0, 11.0, 20.0, 18.0, 17.0],
+                1: [18.0, 16.0, 15.0, 10.0, 8.0, 7.0, 9.0, 9.0, 8.0],
+            },
+            "possession_by_zone": {
+                0: [60, 50, 40, 90, 100, 110, 200, 180, 170],
+                1: [180, 160, 150, 100, 80, 70, 90, 90, 80],
+            },
+            "recent_events": [
+                {"type": "pass", "team": 0},
+                {"type": "pass", "team": 0},
+                {"type": "pass", "team": 0},
+                {"type": "pass", "team": 0},
+                {"type": "pass", "team": 0},
+            ],
+        }
+
+        alerts = alert_system.analyze_and_generate_alerts(
+            frame_id=CHECK_FRAME,
+            possession_stats=possession_stats,
+            spatial_stats=spatial_stats,
+        )
+        prediction_alerts = [a for a in alerts if a.type == "prediction" and a.team_id == 0]
+        assert prediction_alerts, "Debe haber alerta predictiva para equipo en presión ofensiva"
+        predicted_events = prediction_alerts[0].data.get("predicted_events", {})
+        assert "shot" in predicted_events
+        assert "goal" in predicted_events
+        assert "corner" in predicted_events
+        assert "foul_in_danger_zone" in predicted_events

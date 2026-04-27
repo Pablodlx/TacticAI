@@ -17,6 +17,7 @@ from datetime import datetime
 import time
 import asyncio
 import logging
+from collections import deque
 
 try:
     from modules.tactical_analyzer import TacticalAnalyzer
@@ -113,6 +114,8 @@ class MatchAlertSystem:
 
         # Zone shift detection
         self.last_zone_analysis: Dict[int, Dict] = {}
+        self.recent_alert_signatures: deque = deque(maxlen=25)
+        self.max_alerts_per_check = 3
         
     def should_check(self, frame_id: int) -> bool:
         """Determina si es momento de evaluar y potencialmente generar alertas"""
@@ -248,8 +251,48 @@ class MatchAlertSystem:
         # Esta alerta se genera independientemente del intervalo de chequeo
         summary = self._check_periodic_summary(frame_id, possession_stats, possession_percent)
         alerts.extend(summary)
-        
-        return alerts
+
+        # === ALERTA 8: Predicción de eventos peligrosos ===
+        alerts.extend(self._check_predictive_events(frame_id, possession_stats, spatial_stats, possession_percent))
+
+        return self._score_and_select_alerts(alerts)
+
+    def _normalize_spatial_stats(self, spatial_stats: Optional[Dict]) -> Dict:
+        """Normaliza el payload espacial para consumo consistente en reglas."""
+        if not spatial_stats:
+            return {}
+
+        normalized = dict(spatial_stats)
+        normalized.setdefault('possession_by_zone', {})
+        normalized.setdefault('zone_percentages', {})
+        normalized.setdefault('partition_type', normalized.get('zone_partition_type', 'thirds_lanes'))
+
+        zone_names = normalized.get('zone_names')
+        if isinstance(zone_names, list):
+            normalized['zone_names_map'] = {idx: name for idx, name in enumerate(zone_names)}
+        elif isinstance(zone_names, dict):
+            normalized['zone_names_map'] = {
+                int(idx): name for idx, name in zone_names.items()
+            }
+        else:
+            normalized['zone_names_map'] = self._build_zone_name_map(
+                normalized.get('num_zones', 9),
+                normalized.get('partition_type', 'thirds_lanes')
+            )
+            normalized['zone_names'] = list(normalized['zone_names_map'].values())
+
+        return normalized
+
+    def _build_zone_name_map(self, num_zones: int, partition_type: str) -> Dict[int, str]:
+        """Genera nombres de zona canónicos cuando no vienen en el payload."""
+        if partition_type == 'thirds_lanes' and int(num_zones or 0) == 9:
+            names = [
+                'def_left', 'def_center', 'def_right',
+                'mid_left', 'mid_center', 'mid_right',
+                'off_left', 'off_center', 'off_right'
+            ]
+            return {idx: name for idx, name in enumerate(names)}
+        return {idx: f"zone_{idx}" for idx in range(int(num_zones or 0))}
     
     def _check_possession_dominance(self, frame_id: int, possession_percent: Dict) -> List[Alert]:
         """Detecta si un equipo tiene dominio claro del partido"""
@@ -429,60 +472,42 @@ class MatchAlertSystem:
     def _check_spatial_pressure(self, frame_id: int, spatial_stats: Dict, possession_percent: Dict) -> List[Alert]:
         """Analiza presión en zonas específicas del campo"""
         alerts = []
-        
-        zone_possession = spatial_stats.get('zone_possession', {})
-        if not zone_possession:
+
+        spatial_stats = self._normalize_spatial_stats(spatial_stats)
+        zone_percentages = spatial_stats.get('zone_percentages', {})
+        if not zone_percentages:
             return alerts
-        
-        # Analizar zonas defensivas (tercios)
-        # Zona 0 = tercio defensivo equipo 0
-        # Zona 2 = tercio defensivo equipo 1
-        
-        defensive_zones = {
-            0: [0, 3, 6, 9],  # Tercio izquierdo equipo 0 (columnas 0)
-            1: [2, 5, 8, 11]  # Tercio derecho equipo 1 (columnas 2)
-        }
-        
-        for team_id, zones in defensive_zones.items():
+
+        partition_type = spatial_stats.get('partition_type', 'thirds_lanes')
+        if partition_type != 'thirds_lanes':
+            return alerts
+
+        for team_id in [0, 1]:
             opponent_id = 1 - team_id
-            
-            # Calcular posesión del rival en zona defensiva
-            opponent_possession_in_defense = 0
-            total_in_defense = 0
-            
-            for zone_id in zones:
-                if zone_id in zone_possession:
-                    zone_data = zone_possession[zone_id]
-                    opponent_frames = zone_data.get(f'team_{opponent_id}', 0)
-                    team_frames = zone_data.get(f'team_{team_id}', 0)
-                    
-                    opponent_possession_in_defense += opponent_frames
-                    total_in_defense += (opponent_frames + team_frames)
-            
-            if total_in_defense == 0:
+            opponent_zone_pct = zone_percentages.get(opponent_id) or zone_percentages.get(str(opponent_id))
+            if not opponent_zone_pct or len(opponent_zone_pct) < 9:
                 continue
-            
-            opponent_pct_in_defense = opponent_possession_in_defense / total_in_defense
-            
+
+            # Con coordenadas orientadas por equipo, las zonas 6..8 son ofensivas.
+            opponent_offensive_pressure = float(sum(opponent_zone_pct[6:9])) / 100.0
             alert_type = f"zone_pressure_team{team_id}"
-            
-            # Alerta si el rival tiene mucha posesión en nuestra zona defensiva
-            if opponent_pct_in_defense >= self.ZONE_PRESSURE_THRESHOLD and self.can_send_alert(alert_type):
+
+            if opponent_offensive_pressure >= self.ZONE_PRESSURE_THRESHOLD and self.can_send_alert(alert_type):
                 alert = self._create_alert(
                     frame_id=frame_id,
                     alert_type="zone",
                     severity="warning",
                     title=f"🛡️ Presión rival en zona defensiva - Equipo {team_id}",
-                    message=f"El Equipo {opponent_id} acumula {opponent_pct_in_defense*100:.0f}% de posesión en tu tercio defensivo. Aumenta la salida de balón.",
+                    message=f"El Equipo {opponent_id} concentra {opponent_offensive_pressure*100:.0f}% de su posesión en zonas ofensivas. Riesgo alto sobre la defensa rival.",
                     team_id=team_id,
                     data={
-                        'opponent_possession_in_defense': opponent_pct_in_defense * 100,
-                        'zones_affected': len(zones)
+                        'opponent_offensive_pressure': opponent_offensive_pressure * 100,
+                        'zones_affected': ['off_left', 'off_center', 'off_right']
                     }
                 )
                 alerts.append(alert)
                 self._mark_alert_sent(alert_type)
-        
+
         return alerts
     
     def _check_periodic_summary(self, frame_id: int, possession_stats: Dict, possession_percent: Dict) -> List[Alert]:
@@ -579,14 +604,15 @@ class MatchAlertSystem:
         alert_type = "zone_concentration"
 
         try:
-            # Obtener estadísticas de posesión por zona
-            zone_stats = spatial_stats.get('possession_by_zone', {})
+            normalized_spatial = self._normalize_spatial_stats(spatial_stats)
+            zone_stats = normalized_spatial.get('possession_by_zone', {})
             if not zone_stats:
                 return alerts
+            zone_names_map = normalized_spatial.get('zone_names_map', {})
 
             # Analizar zonas para ambos equipos
             zone_analysis = self.tactical_analyzer.insight_generator.zone_analyzer.analyze(
-                zone_stats, zone_names={}
+                zone_stats, zone_names=zone_names_map
             )
 
             self.last_zone_analysis = zone_analysis
@@ -627,6 +653,162 @@ class MatchAlertSystem:
 
         except Exception as e:
             logger.error(f"Error en _check_zone_dominance_patterns: {e}")
+
+        return alerts
+
+    def _score_and_select_alerts(self, alerts: List[Alert]) -> List[Alert]:
+        """Ordena y filtra alertas según relevancia táctica."""
+        if not alerts:
+            return []
+
+        scored = []
+        for alert in alerts:
+            score = self._compute_relevance_score(alert)
+            alert.data['relevance_score'] = round(score, 3)
+            scored.append((score, alert))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        selected = [alert for _, alert in scored[:self.max_alerts_per_check]]
+
+        for alert in selected:
+            self.recent_alert_signatures.append(self._alert_signature(alert))
+        return selected
+
+    def _compute_relevance_score(self, alert: Alert) -> float:
+        """Calcula score de relevancia basado en impacto, contexto y novedad."""
+        severity_weight = {'critical': 1.0, 'warning': 0.75, 'info': 0.5}
+        type_weight = {
+            'prediction': 1.0,
+            'zone': 1.0,
+            'tactical': 0.95,
+            'possession': 0.8,
+            'passing': 0.75,
+            'warning': 0.7
+        }
+
+        impact = severity_weight.get(alert.severity, 0.5)
+        context = type_weight.get(alert.type, 0.6)
+        novelty = 1.0 if self._alert_signature(alert) not in self.recent_alert_signatures else 0.55
+        magnitude = self._extract_alert_magnitude(alert.data or {})
+
+        # Score final: prioriza impacto y contexto, penaliza repeticiones y premia magnitudes altas.
+        return (impact * 0.4) + (context * 0.3) + (novelty * 0.2) + (magnitude * 0.1)
+
+    def _extract_alert_magnitude(self, data: Dict) -> float:
+        """Normaliza señales numéricas de la alerta a [0, 1] para enriquecer ranking."""
+        candidates = [
+            abs(float(data.get('difference', 0.0))) / 100.0,
+            abs(float(data.get('concentration', 0.0))),
+            abs(float(data.get('opponent_offensive_pressure', 0.0))) / 100.0,
+            abs(float(data.get('swing', 0.0))) / 100.0,
+        ]
+        bounded = [max(0.0, min(1.0, value)) for value in candidates]
+        return max(bounded) if bounded else 0.0
+
+    def _alert_signature(self, alert: Alert) -> Tuple:
+        """Firma compacta para detectar alertas repetidas."""
+        dominant = tuple((alert.data or {}).get('dominant_zones', [])[:2])
+        return (alert.type, alert.team_id, alert.severity, dominant)
+
+    def _check_predictive_events(
+        self,
+        frame_id: int,
+        possession_stats: Dict,
+        spatial_stats: Optional[Dict],
+        possession_percent: Dict
+    ) -> List[Alert]:
+        """
+        Predice eventos de riesgo en la próxima ventana temporal:
+        tiro, gol, córner o falta en zonas peligrosas.
+        """
+        alerts = []
+        if not spatial_stats:
+            return alerts
+
+        spatial_stats = self._normalize_spatial_stats(spatial_stats)
+        zone_percentages = spatial_stats.get('zone_percentages', {})
+        partition_type = spatial_stats.get('partition_type', 'thirds_lanes')
+        if partition_type != 'thirds_lanes':
+            return alerts
+
+        recent_events = spatial_stats.get('recent_events', [])
+        total_frames = sum(possession_stats.get('frames_by_team', {}).values())
+        total_minutes = max((total_frames / self.fps) / 60.0, 0.1)
+        possession_changes = possession_stats.get('possession_changes', 0)
+        game_intensity = min(1.0, (possession_changes / total_minutes) / 20.0)
+
+        for team_id in [0, 1]:
+            zone_pct = zone_percentages.get(team_id) or zone_percentages.get(str(team_id))
+            if not zone_pct or len(zone_pct) < 9:
+                continue
+
+            team_passes_recent = sum(
+                1 for event in recent_events
+                if event.get('type') == 'pass' and event.get('team') == team_id
+            )
+            pass_momentum = min(1.0, team_passes_recent / 8.0)
+            offensive_pressure = float(sum(zone_pct[6:9])) / 100.0
+            midfield_control = float(sum(zone_pct[3:6])) / 100.0
+            possession_ratio = max(0.0, min(1.0, possession_percent.get(team_id, 0.0) / 100.0))
+
+            danger_index = (
+                (offensive_pressure * 0.45) +
+                (possession_ratio * 0.25) +
+                (pass_momentum * 0.20) +
+                (midfield_control * 0.10)
+            )
+
+            if danger_index < 0.52:
+                continue
+
+            shot_prob = min(0.95, (danger_index * 1.10))
+            goal_prob = min(0.70, (offensive_pressure * 0.45) + (pass_momentum * 0.30) + (possession_ratio * 0.20))
+            corner_prob = min(0.80, (offensive_pressure * 0.55) + (pass_momentum * 0.20) + ((1.0 - possession_ratio) * 0.10))
+            foul_prob = min(0.75, (offensive_pressure * 0.35) + (game_intensity * 0.40) + (pass_momentum * 0.15))
+
+            predicted_events = {
+                'shot': round(shot_prob * 100, 1),
+                'goal': round(goal_prob * 100, 1),
+                'corner': round(corner_prob * 100, 1),
+                'foul_in_danger_zone': round(foul_prob * 100, 1),
+            }
+
+            zone_name_map = spatial_stats.get('zone_names_map', {})
+            offensive_zones = [(idx, zone_pct[idx]) for idx in [6, 7, 8]]
+            offensive_zones.sort(key=lambda item: item[1], reverse=True)
+            dangerous_zones = [zone_name_map.get(idx, f"zone_{idx}") for idx, pct in offensive_zones if pct > 0][:2]
+            zones_text = ', '.join(dangerous_zones) if dangerous_zones else "off_center"
+
+            alert_key = f"prediction_team{team_id}"
+            if not self.can_send_alert(alert_key):
+                continue
+
+            horizon_minutes = 2
+            message = (
+                f"Predicción ({horizon_minutes} min): tiro {predicted_events['shot']:.0f}%, "
+                f"gol {predicted_events['goal']:.0f}%, córner {predicted_events['corner']:.0f}%, "
+                f"falta peligrosa {predicted_events['foul_in_danger_zone']:.0f}%. "
+                f"Zonas de mayor amenaza: {zones_text}."
+            )
+
+            severity = "warning" if shot_prob >= 0.75 or goal_prob >= 0.45 else "info"
+            alert = self._create_alert(
+                frame_id=frame_id,
+                alert_type="prediction",
+                severity=severity,
+                title=f"🔮 Predicción ofensiva - Equipo {team_id}",
+                message=message,
+                team_id=team_id,
+                data={
+                    'prediction_window_minutes': horizon_minutes,
+                    'predicted_events': predicted_events,
+                    'danger_index': round(danger_index, 3),
+                    'dangerous_zones': dangerous_zones,
+                    'team_passes_recent': team_passes_recent,
+                }
+            )
+            alerts.append(alert)
+            self._mark_alert_sent(alert_key)
 
         return alerts
 

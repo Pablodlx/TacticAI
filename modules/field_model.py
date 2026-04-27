@@ -281,6 +281,14 @@ class ZoneModel:
         if 0 <= zone_id < self.num_zones:
             return self.zone_names[zone_id]
         return "unknown"
+
+    def get_zone_names(self) -> List[str]:
+        """Retorna la lista canónica de nombres de zona."""
+        return list(self.zone_names)
+
+    def get_zone_name_map(self) -> Dict[int, str]:
+        """Retorna un mapping canónico {zone_id: zone_name}."""
+        return {idx: name for idx, name in enumerate(self.zone_names)}
     
     def get_zone_bounds(self, zone_id: int) -> Optional[Tuple[float, float, float, float]]:
         """

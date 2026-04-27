@@ -6,7 +6,34 @@
     <title>TacticEYE - Professional Football Analytics</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=20260427a">
+    <style>
+        body {
+            font-family: Arial, Helvetica, sans-serif !important;
+            background: #ffffff !important;
+            color: #153b2b !important;
+        }
+        .analysis-panel,
+        .card,
+        .source-option-card,
+        .stat-card,
+        .alert-chatbot {
+            background: #ffffff !important;
+        }
+        .bg-tactic {
+            background: linear-gradient(135deg, #1c8f5a 0%, #16784f 100%) !important;
+        }
+        .card-header,
+        .panel-header {
+            background: #f2fbf6 !important;
+            color: #153b2b !important;
+        }
+        .btn-primary,
+        .btn-success {
+            background: linear-gradient(135deg, #1b8f5a 0%, #2ca36a 100%) !important;
+            border-color: #1b8f5a !important;
+        }
+    </style>
 </head>
 <body>
     <!-- Top Navigation -->
@@ -583,19 +610,19 @@
     <!-- Modal para resumen de heatmaps -->
     <div class="modal fade" id="heatmapSummaryModal" tabindex="-1">
         <div class="modal-dialog modal-xl">
-            <div class="modal-content" style="background-color: #1a1a1a;">
-                <div class="modal-header border-secondary">
-                    <h5 class="modal-title text-white">
+            <div class="modal-content" style="background-color: #ffffff;">
+                <div class="modal-header">
+                    <h5 class="modal-title">
                         <i class="fas fa-chart-area me-2"></i>Heatmap Summary - Both Teams
                     </h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
                     <div class="text-center">
                         <img id="heatmap-summary-image" src="" alt="Heatmap Summary" class="img-fluid" style="border-radius: 8px; max-height: 70vh;">
                     </div>
                 </div>
-                <div class="modal-footer border-secondary">
+                <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                     <a id="download-summary-btn" href="" download="heatmap_summary.png" class="btn btn-primary">
                         <i class="fas fa-download me-2"></i>Download Summary
@@ -607,6 +634,6 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=20260427a"></script>
 </body>
 </html>

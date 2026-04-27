@@ -3,18 +3,18 @@
    ==================== */
 
 :root {
-    --primary-blue: #0a2540;
-    --secondary-blue: #1e3a5f;
-    --accent-green: #00d4aa;
-    --accent-blue: #3b82f6;
-    --dark-bg: #0f1419;
-    --card-bg: #1a1f2e;
-    --border-color: #2d3748;
-    --text-primary: #ffffff;
-    --text-secondary: #a0aec0;
-    --success: #10b981;
+    --primary-blue: #0f5d3f;
+    --secondary-blue: #16784f;
+    --accent-green: #1b8f5a;
+    --accent-blue: #2ca36a;
+    --dark-bg: #f7fdf9;
+    --card-bg: #ffffff;
+    --border-color: #d3e7da;
+    --text-primary: #153b2b;
+    --text-secondary: #4d6d5c;
+    --success: #1f9d63;
     --warning: #f59e0b;
-    --danger: #ef4444;
+    --danger: #d54b4b;
 }
 
 * {
@@ -24,8 +24,8 @@
 }
 
 body {
-    font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background: linear-gradient(135deg, #0a2540 0%, #0f1419 100%);
+    font-family: Arial, Helvetica, sans-serif;
+    background: #ffffff;
     color: var(--text-primary);
     min-height: 100vh;
 }
@@ -35,9 +35,9 @@ body {
    ==================== */
 
 .bg-tactic {
-    background: linear-gradient(135deg, #0a2540 0%, #1e3a5f 100%) !important;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-    border-bottom: 2px solid var(--accent-green);
+    background: linear-gradient(135deg, #1c8f5a 0%, #16784f 100%) !important;
+    box-shadow: 0 4px 12px rgba(27, 143, 90, 0.25);
+    border-bottom: 2px solid #e6f4ec;
 }
 
 .brand-logo {
@@ -57,15 +57,16 @@ body {
     font-size: 24px;
     font-weight: 700;
     letter-spacing: -0.5px;
-    background: linear-gradient(135deg, var(--accent-green) 0%, var(--accent-blue) 100%);
+    color: #ffffff;
+    background: none;
     -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+    -webkit-text-fill-color: #ffffff;
     background-clip: text;
 }
 
 .brand-subtitle {
     font-size: 11px;
-    color: var(--text-secondary);
+    color: #e6f4ec;
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 1px;
@@ -94,25 +95,25 @@ body {
    ==================== */
 
 .analysis-panel {
-    background: rgba(26, 31, 46, 0.95);
+    background: #ffffff;
     border-radius: 16px;
     padding: 0;
     margin-bottom: 24px;
     border: 1px solid var(--border-color);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-    backdrop-filter: blur(10px);
+    box-shadow: 0 8px 22px rgba(27, 143, 90, 0.1);
+    backdrop-filter: none;
     transition: transform 0.3s ease, box-shadow 0.3s ease;
 }
 
 .analysis-panel:hover {
     transform: translateY(-2px);
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 12px 28px rgba(27, 143, 90, 0.15);
 }
 
 .panel-header {
     padding: 24px 30px;
     border-bottom: 1px solid var(--border-color);
-    background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(0, 212, 170, 0.1) 100%);
+    background: linear-gradient(135deg, #f1fbf5 0%, #e6f6ed 100%);
 }
 
 .panel-title {
@@ -148,12 +149,12 @@ body {
     padding: 60px 40px;
     text-align: center;
     transition: all 0.3s ease;
-    background: rgba(59, 130, 246, 0.05);
+    background: #f8fdf9;
 }
 
 .upload-zone:hover {
     border-color: var(--accent-green);
-    background: rgba(0, 212, 170, 0.1);
+    background: #effaf2;
     transform: scale(1.02);
 }
 
@@ -180,18 +181,18 @@ body {
    ==================== */
 
 .btn-primary {
-    background: linear-gradient(135deg, var(--accent-green) 0%, var(--accent-blue) 100%);
+    background: linear-gradient(135deg, #1b8f5a 0%, #2ca36a 100%);
     border: none;
     padding: 12px 32px;
     font-weight: 600;
     border-radius: 8px;
     transition: all 0.3s ease;
-    box-shadow: 0 4px 12px rgba(0, 212, 170, 0.3);
+    box-shadow: 0 4px 12px rgba(27, 143, 90, 0.25);
 }
 
 .btn-primary:hover {
     transform: translateY(-2px);
-    box-shadow: 0 6px 16px rgba(0, 212, 170, 0.5);
+    box-shadow: 0 6px 16px rgba(27, 143, 90, 0.38);
 }
 
 .btn-success {
@@ -220,7 +221,7 @@ body {
 .progress-bar-custom {
     width: 100%;
     height: 60px;
-    background: rgba(0, 0, 0, 0.3);
+    background: #edf5f0;
     border-radius: 30px;
     position: relative;
     overflow: hidden;
@@ -232,7 +233,7 @@ body {
     background: linear-gradient(90deg, var(--accent-green) 0%, var(--accent-blue) 100%);
     border-radius: 30px;
     transition: width 0.5s ease;
-    box-shadow: 0 0 20px rgba(0, 212, 170, 0.6);
+    box-shadow: 0 0 16px rgba(27, 143, 90, 0.4);
     position: relative;
     overflow: hidden;
 }
@@ -276,7 +277,7 @@ body {
     align-items: center;
     gap: 12px;
     padding: 16px 24px;
-    background: rgba(0, 0, 0, 0.2);
+    background: #f8fdf9;
     border-radius: 12px;
     border: 1px solid var(--border-color);
     flex: 1;
@@ -296,20 +297,20 @@ body {
    ==================== */
 
 .stat-card {
-    background: rgba(26, 31, 46, 0.95);
+    background: #ffffff;
     border-radius: 16px;
     padding: 24px;
     display: flex;
     align-items: center;
     gap: 20px;
     border: 1px solid var(--border-color);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 14px rgba(27, 143, 90, 0.12);
     transition: all 0.3s ease;
 }
 
 .stat-card:hover {
     transform: translateY(-4px);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 8px 24px rgba(27, 143, 90, 0.16);
 }
 
 .stat-icon {
@@ -342,7 +343,7 @@ body {
     font-size: 32px;
     font-weight: 700;
     margin: 0;
-    background: linear-gradient(135deg, var(--accent-green) 0%, var(--accent-blue) 100%);
+    background: linear-gradient(135deg, #1b8f5a 0%, #2ca36a 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -363,7 +364,7 @@ body {
     justify-content: space-between;
     align-items: center;
     padding: 16px;
-    background: rgba(0, 0, 0, 0.2);
+    background: #f8fdf9;
     border-radius: 8px;
     border: 1px solid var(--border-color);
 }
@@ -394,7 +395,7 @@ body {
 }
 
 .possession-bar.team-1 {
-    background: linear-gradient(90deg, #fa709a 0%, #fee140 100%);
+    background: linear-gradient(90deg, #70c38f 0%, #2ca36a 100%);
 }
 
 .possession-bar-container span {
@@ -417,21 +418,21 @@ canvas {
    ==================== */
 
 .alert-info {
-    background: rgba(59, 130, 246, 0.2);
-    border: 1px solid var(--accent-blue);
+    background: #edf9f1;
+    border: 1px solid #b8e0c7;
     color: var(--text-primary);
     border-radius: 8px;
 }
 
 .alert-success {
-    background: rgba(16, 185, 129, 0.2);
+    background: #e8f7ef;
     border: 1px solid var(--success);
     color: var(--text-primary);
     border-radius: 8px;
 }
 
 .alert-danger {
-    background: rgba(239, 68, 68, 0.2);
+    background: #fff3f3;
     border: 1px solid var(--danger);
     color: var(--text-primary);
     border-radius: 8px;
@@ -499,7 +500,7 @@ canvas {
    ==================== */
 
 .source-option-card {
-    background: rgba(30, 58, 95, 0.3);
+    background: #ffffff;
     border: 2px solid var(--border-color);
     border-radius: 16px;
     padding: 30px;
@@ -509,7 +510,7 @@ canvas {
 
 .source-option-card:hover {
     border-color: var(--accent-green);
-    background: rgba(30, 58, 95, 0.5);
+    background: #f6fcf8;
     transform: translateY(-4px);
     box-shadow: 0 8px 24px rgba(0, 212, 170, 0.2);
 }
@@ -537,18 +538,18 @@ canvas {
     padding: 30px 20px;
     text-align: center;
     transition: all 0.3s ease;
-    background: rgba(59, 130, 246, 0.05);
+    background: #f8fdf9;
 }
 
 .upload-zone-compact:hover {
-    border-color: var(--accent-blue);
-    background: rgba(59, 130, 246, 0.1);
+    border-color: var(--accent-green);
+    background: #f0faf4;
 }
 
 /* Drag and drop active state */
 .upload-zone-compact.dragover {
     border-color: var(--accent-green);
-    background: rgba(0, 212, 170, 0.15);
+    background: #e8f7ef;
     transform: scale(1.02);
 }
 
@@ -557,7 +558,7 @@ canvas {
    ==================== */
 
 .stat-box {
-    background: linear-gradient(135deg, rgba(26, 31, 46, 0.95) 0%, rgba(15, 20, 25, 0.95) 100%);
+    background: linear-gradient(135deg, #ffffff 0%, #f4fbf7 100%);
     border: 1px solid var(--border-color);
     border-radius: 12px;
     padding: 1.5rem;
@@ -584,7 +585,7 @@ canvas {
     color: var(--text-primary);
     font-size: 1.75rem;
     font-weight: 700;
-    font-family: 'Courier New', monospace;
+    font-family: Arial, Helvetica, sans-serif;
 }
 
 #live-stats {
@@ -621,9 +622,9 @@ canvas {
 }
 
 #spatial-heatmaps-section .card-header {
-    background: linear-gradient(135deg, var(--secondary-blue) 0%, var(--primary-blue) 100%);
+    background: linear-gradient(135deg, #f0faf4 0%, #e8f7ef 100%);
     color: var(--text-primary);
-    border-bottom: 2px solid var(--accent-green);
+    border-bottom: 2px solid #cfe8d9;
 }
 
 #calibration-status {
@@ -632,8 +633,8 @@ canvas {
 }
 
 #spatial-info {
-    background: rgba(59, 130, 246, 0.1);
-    border-color: var(--accent-blue);
+    background: #f3fbf6;
+    border-color: #b8e0c7;
     color: var(--text-primary);
 }
 
@@ -655,14 +656,14 @@ canvas {
     right: 20px;
     width: 420px;
     max-height: 600px;
-    background: rgba(26, 31, 46, 0.98);
+    background: #ffffff;
     border-radius: 16px;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 10px 30px rgba(27, 143, 90, 0.2);
     border: 2px solid var(--accent-green);
     z-index: 9999;
     display: flex;
     flex-direction: column;
-    backdrop-filter: blur(10px);
+    backdrop-filter: none;
     animation: slideInUp 0.4s ease-out;
 }
 
@@ -671,7 +672,7 @@ canvas {
 }
 
 .chatbot-header {
-    background: linear-gradient(135deg, var(--secondary-blue) 0%, var(--primary-blue) 100%);
+    background: linear-gradient(135deg, #1b8f5a 0%, #16784f 100%);
     color: white;
     padding: 16px 20px;
     border-top-left-radius: 14px;
@@ -693,7 +694,7 @@ canvas {
 }
 
 .chatbot-body::-webkit-scrollbar-track {
-    background: rgba(0, 0, 0, 0.2);
+    background: #edf5f0;
     border-radius: 10px;
 }
 
@@ -710,8 +711,8 @@ canvas {
 }
 
 .alert-message {
-    background: rgba(59, 130, 246, 0.1);
-    border-left: 4px solid var(--accent-blue);
+    background: #f3fbf6;
+    border-left: 4px solid var(--accent-green);
     border-radius: 8px;
     padding: 14px;
     margin-bottom: 12px;
@@ -722,8 +723,8 @@ canvas {
 }
 
 .alert-message.info {
-    background: rgba(59, 130, 246, 0.1);
-    border-left-color: var(--accent-blue);
+    background: #f3fbf6;
+    border-left-color: var(--accent-green);
 }
 
 .alert-message.warning {
@@ -745,10 +746,10 @@ canvas {
     align-items: center;
     justify-content: center;
     border-radius: 50%;
-    background: rgba(255, 255, 255, 0.1);
+    background: #e8f5ee;
 }
 
-.alert-message.info .alert-icon { color: var(--accent-blue); }
+.alert-message.info .alert-icon { color: var(--accent-green); }
 .alert-message.warning .alert-icon { color: var(--warning); }
 .alert-message.critical .alert-icon { color: var(--danger); }
 
@@ -792,7 +793,7 @@ canvas {
     color: white;
     font-size: 24px;
     cursor: pointer;
-    box-shadow: 0 6px 20px rgba(0, 212, 170, 0.4);
+    box-shadow: 0 6px 20px rgba(27, 143, 90, 0.35);
     z-index: 9998;
     display: flex;
     align-items: center;
@@ -802,7 +803,44 @@ canvas {
 
 .chatbot-toggle-btn:hover {
     transform: scale(1.1);
-    box-shadow: 0 8px 25px rgba(0, 212, 170, 0.6);
+    box-shadow: 0 8px 25px rgba(27, 143, 90, 0.48);
+}
+
+/* Bootstrap cards/forms alignment with green-white theme */
+.card {
+    background: #ffffff;
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    box-shadow: 0 4px 16px rgba(27, 143, 90, 0.1);
+}
+
+.card-header {
+    background: #f2fbf6;
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.card-header.bg-success,
+.card-header.bg-danger {
+    background: linear-gradient(135deg, #1b8f5a 0%, #16784f 100%) !important;
+    color: #ffffff !important;
+}
+
+.form-control,
+.form-select {
+    border-color: #cfe1d6;
+    font-family: Arial, Helvetica, sans-serif;
+}
+
+.form-control:focus,
+.form-select:focus {
+    border-color: #1b8f5a;
+    box-shadow: 0 0 0 0.2rem rgba(27, 143, 90, 0.15);
+}
+
+/* Neutralize inline colorful stat icons */
+.stat-icon {
+    background: linear-gradient(135deg, #1b8f5a 0%, #2ca36a 100%) !important;
 }
 
 .chatbot-toggle-btn .badge {

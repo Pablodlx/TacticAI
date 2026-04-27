@@ -1095,38 +1095,60 @@ function stopHeatmapUpdates() {
 // Actualizar top zonas
 function updateTopZones(teamId, zonePercentages) {
     if (!zonePercentages || !Array.isArray(zonePercentages)) return;
-    
-    const zoneNames = [
-        'Defensive Left', 'Defensive Center', 'Defensive Right',
-        'Midfield Left', 'Midfield Center', 'Midfield Right',
-        'Offensive Left', 'Offensive Center', 'Offensive Right'
-    ];
-    
+
     // Crear array de zonas con índice y porcentaje
     const zones = zonePercentages.map((pct, idx) => ({
         index: idx,
-        name: zoneNames[idx] || `Zone ${idx}`,
-        percent: pct
+        name: getNeutralZoneLabelByIndex(idx),
+        percent: Number(pct) || 0
     }));
     
     // Ordenar por porcentaje descendente
     zones.sort((a, b) => b.percent - a.percent);
     
     // Tomar top 3
-    const top3 = zones.slice(0, 3).filter(z => z.percent > 0);
+    const top3 = zones.slice(0, 3);
     
     // Actualizar HTML
     const topZonesDiv = document.getElementById(`top-zones-team-${teamId}`);
     if (topZonesDiv) {
-        if (top3.length === 0) {
-            topZonesDiv.innerHTML = '<span class="badge bg-secondary">No data yet</span>';
-        } else {
-            const badgeClass = teamId === 0 ? 'bg-success' : 'bg-danger';
-            topZonesDiv.innerHTML = top3.map((zone, i) => 
-                `<span class="badge ${badgeClass} me-1">${i + 1}. ${zone.name} (${zone.percent.toFixed(1)}%)</span>`
-            ).join('');
-        }
+        const badgeClass = teamId === 0 ? 'bg-success' : 'bg-danger';
+        topZonesDiv.innerHTML = top3.map((zone, i) =>
+            `<span class="badge ${badgeClass} me-1">${i + 1}. ${zone.name} (${zone.percent.toFixed(1)}%)</span>`
+        ).join('');
     }
+}
+
+function getNeutralZoneLabelByIndex(zoneIndex) {
+    // Mapeo para partición 3x3 (x por lado del campo, y por franja vertical).
+    const xSide = ['Lado izquierdo', 'Centro del campo', 'Lado derecho'];
+    const yBand = ['Franja baja', 'Franja media', 'Franja superior'];
+
+    if (zoneIndex >= 0 && zoneIndex < 9) {
+        const side = xSide[Math.floor(zoneIndex / 3)] || 'Centro del campo';
+        const band = yBand[zoneIndex % 3] || 'Franja media';
+        return `${side} - ${band}`;
+    }
+
+    return `Zona ${zoneIndex}`;
+}
+
+function formatZoneName(zoneName) {
+    if (!zoneName) return 'Zona desconocida';
+
+    const zoneLabelMap = {
+        def_left: 'Lado izquierdo - franja baja',
+        def_center: 'Lado izquierdo - franja media',
+        def_right: 'Lado izquierdo - franja superior',
+        mid_left: 'Centro del campo - franja baja',
+        mid_center: 'Centro del campo - franja media',
+        mid_right: 'Centro del campo - franja superior',
+        off_left: 'Lado derecho - franja baja',
+        off_center: 'Lado derecho - franja media',
+        off_right: 'Lado derecho - franja superior'
+    };
+
+    return zoneLabelMap[zoneName] || zoneName.replaceAll('_', ' ');
 }
 
 // Función para mostrar el resumen de heatmaps
@@ -1198,6 +1220,7 @@ function addAlertToChatbot(alert) {
         'passing': 'fa-shoe-prints',
         'zone': 'fa-map-marker-alt',
         'tactical': 'fa-chess',
+        'prediction': 'fa-wand-magic-sparkles',
         'warning': 'fa-exclamation-triangle'
     };
     const icon = iconMap[alert.type] || 'fa-info-circle';
@@ -1206,6 +1229,27 @@ function addAlertToChatbot(alert) {
     const date = new Date(alert.timestamp * 1000);
     const timeStr = date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     
+    const relevanceScore = alert.data?.relevance_score;
+    const predicted = alert.data?.predicted_events;
+    let contextualHint = '';
+    if (Array.isArray(alert.data?.dominant_zones) && alert.data.dominant_zones.length) {
+        const topZones = alert.data.dominant_zones.slice(0, 2).map(formatZoneName).join(' y ');
+        contextualHint = `\nFoco zonal: ${topZones}.`;
+    } else if (Array.isArray(alert.data?.zones_affected) && alert.data.zones_affected.length) {
+        const affected = alert.data.zones_affected.map(formatZoneName).join(', ');
+        contextualHint = `\nZonas clave: ${affected}.`;
+    }
+
+    let predictionHint = '';
+    if (predicted && typeof predicted === 'object') {
+        predictionHint = `\nProbabilidades: tiro ${predicted.shot ?? 0}%, gol ${predicted.goal ?? 0}%, córner ${predicted.corner ?? 0}%, falta peligrosa ${predicted.foul_in_danger_zone ?? 0}%.`;
+    }
+
+    const enrichedMessage = `${alert.message || ''}${predictionHint}${contextualHint}`;
+    const relevanceBadge = (typeof relevanceScore === 'number')
+        ? `<span class="badge bg-dark-subtle text-dark ms-2">Relevancia ${(relevanceScore * 100).toFixed(0)}%</span>`
+        : '';
+
     // Crear elemento de alerta
     const alertElement = document.createElement('div');
     alertElement.className = `alert-message ${severityClass}`;
@@ -1214,8 +1258,8 @@ function addAlertToChatbot(alert) {
             <i class="fas ${icon}"></i>
         </div>
         <div class="alert-content">
-            <div class="alert-title">${alert.title}</div>
-            <div class="alert-text">${alert.message}</div>
+            <div class="alert-title">${alert.title}${relevanceBadge}</div>
+            <div class="alert-text">${enrichedMessage}</div>
             <div class="alert-timestamp">
                 <i class="fas fa-clock"></i> ${timeStr} | Frame ${alert.frame_id}
             </div>
