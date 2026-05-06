@@ -1,0 +1,82 @@
+# Predicción de eventos — pesos, umbrales y anti-spam
+# Rutas relativas al directorio del proyecto.
+
+sigmoid_scale: 1.35
+min_probability_to_emit: 0.42
+deduplication_window_sec: 18.0
+cooldown_sec_by_event:
+  dangerous_attack: 25.0
+  shot: 20.0
+  corner: 22.0
+  dangerous_transition: 18.0
+  final_third_entry: 14.0
+  dangerous_turnover: 20.0
+
+# Si prob sube al menos este delta respecto a la última emisión, se permite repetir antes del cooldown
+probability_surge_delta: 0.12
+
+min_anthropic_interval_sec: 4.0
+
+events:
+  dangerous_attack:
+    horizon_sec: 8
+    weights:
+      expected_threat_proxy: 0.28
+      box_entry_risk: 0.22
+      final_third_presence: 0.18
+      progression_rate: 0.14
+      attacking_momentum: 0.20
+      defensive_resistance: 0.12
+    threshold_score: 0.08
+
+  shot:
+    horizon_sec: 6
+    weights:
+      expected_threat_proxy: 0.26
+      box_entry_risk: 0.26
+      final_third_presence: 0.16
+      progression_rate: 0.14
+      attacking_momentum: 0.18
+      defensive_resistance: 0.10
+    threshold_score: 0.12
+
+  corner:
+    horizon_sec: 10
+    weights:
+      wide_overload: 0.35
+      attacking_momentum: 0.18
+      offensive_pressure: 0.22
+      shot_pressure_signal: 0.15
+      field_tilt: 0.10
+    threshold_score: 0.10
+
+  dangerous_transition:
+    horizon_sec: 7
+    weights:
+      transition_danger: 0.42
+      turnover_risk: 0.18
+      progression_rate: 0.22
+      attacking_momentum: 0.18
+    threshold_score: 0.11
+
+  final_third_entry:
+    horizon_sec: 5
+    weights:
+      progression_rate: 0.35
+      final_third_entries_signal: 0.40
+      field_tilt: 0.15
+      attacking_momentum: 0.10
+    threshold_score: 0.09
+
+  dangerous_turnover:
+    horizon_sec: 6
+    weights:
+      turnover_risk: 0.45
+      transition_danger: 0.25
+      progression_rate: -0.08
+      defensive_resistance: 0.12
+    threshold_score: 0.13
+
+severity:
+  medium_probability: 0.58
+  high_probability: 0.72

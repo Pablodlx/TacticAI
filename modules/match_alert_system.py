@@ -11,7 +11,7 @@ Author: TacticEYE2 Team
 Date: 2026-04-14
 """
 
-from typing import List, Dict, Optional, Tuple
+from typing import Any, List, Dict, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 import time
@@ -23,6 +23,20 @@ try:
     from modules.tactical_analyzer import TacticalAnalyzer
 except ImportError:
     TacticalAnalyzer = None
+
+try:
+    from modules.prediction_config import load_prediction_config
+    from modules.event_prediction_engine import EventPredictionEngine
+    from modules.prediction_dispatcher import PredictionDispatcher
+    from modules.prediction_anthropic import PredictionAnthropicClient, format_prediction_alert
+    from modules.match_state_builder import build_prediction_match_state
+except ImportError:
+    load_prediction_config = None  # type: ignore
+    EventPredictionEngine = None  # type: ignore
+    PredictionDispatcher = None  # type: ignore
+    PredictionAnthropicClient = None  # type: ignore
+    format_prediction_alert = None  # type: ignore
+    build_prediction_match_state = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +129,23 @@ class MatchAlertSystem:
         # Zone shift detection
         self.last_zone_analysis: Dict[int, Dict] = {}
         self.recent_alert_signatures: deque = deque(maxlen=25)
-        self.max_alerts_per_check = 3
+        self.max_alerts_per_check = 8
+
+        # Predicción algorítmica + redacción Anthropic
+        self._prediction_cfg = {}
+        self._prediction_engine = None
+        self._prediction_dispatcher = None
+        self._prediction_narrator = None
+        if load_prediction_config and EventPredictionEngine and PredictionDispatcher:
+            try:
+                self._prediction_cfg = load_prediction_config()
+                self._prediction_engine = EventPredictionEngine(self._prediction_cfg)
+                self._prediction_dispatcher = PredictionDispatcher(self._prediction_cfg)
+                if PredictionAnthropicClient:
+                    self._prediction_narrator = PredictionAnthropicClient()
+                logger.info("✓ Motor de predicción de eventos inicializado")
+            except Exception as e:
+                logger.warning("⚠ Motor de predicción no disponible: %s", e)
         
     def should_check(self, frame_id: int) -> bool:
         """Determina si es momento de evaluar y potencialmente generar alertas"""
@@ -160,7 +190,8 @@ class MatchAlertSystem:
         self,
         frame_id: int,
         possession_stats: Dict,
-        spatial_stats: Optional[Dict] = None
+        spatial_stats: Optional[Dict] = None,
+        prediction_context: Optional[Dict] = None,
     ) -> List[Alert]:
         """
         Analiza estadísticas actuales y genera alertas si se detectan patrones relevantes.
@@ -253,7 +284,15 @@ class MatchAlertSystem:
         alerts.extend(summary)
 
         # === ALERTA 8: Predicción de eventos peligrosos ===
-        alerts.extend(self._check_predictive_events(frame_id, possession_stats, spatial_stats, possession_percent))
+        alerts.extend(
+            self._check_predictive_events(
+                frame_id,
+                possession_stats,
+                spatial_stats,
+                possession_percent,
+                prediction_context=prediction_context,
+            )
+        )
 
         return self._score_and_select_alerts(alerts)
 
@@ -269,19 +308,64 @@ class MatchAlertSystem:
 
         zone_names = normalized.get('zone_names')
         if isinstance(zone_names, list):
-            normalized['zone_names_map'] = {idx: name for idx, name in enumerate(zone_names)}
+            normalized['zone_names_map'] = {
+                idx: self._normalize_zone_name(name) for idx, name in enumerate(zone_names)
+            }
         elif isinstance(zone_names, dict):
             normalized['zone_names_map'] = {
-                int(idx): name for idx, name in zone_names.items()
+                int(idx): self._normalize_zone_name(name) for idx, name in zone_names.items()
             }
         else:
             normalized['zone_names_map'] = self._build_zone_name_map(
                 normalized.get('num_zones', 9),
                 normalized.get('partition_type', 'thirds_lanes')
             )
-            normalized['zone_names'] = list(normalized['zone_names_map'].values())
+        normalized['zone_names'] = list(normalized['zone_names_map'].values())
 
         return normalized
+
+    def _normalize_zone_name(self, zone_name: str) -> str:
+        """Normaliza nombres de zona a claves canónicas (def_left, mid_center, ...)."""
+        if not zone_name:
+            return "unknown"
+        key = str(zone_name).strip().lower().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "defensa_izquierda": "def_left",
+            "defensa_centro": "def_center",
+            "defensa_derecha": "def_right",
+            "medio_izquierda": "mid_left",
+            "medio_centro": "mid_center",
+            "medio_derecha": "mid_right",
+            "ataque_izquierda": "off_left",
+            "ataque_centro": "off_center",
+            "ataque_derecha": "off_right",
+            "lado_izquierdo_franja_baja": "def_left",
+            "lado_izquierdo_franja_media": "def_center",
+            "lado_izquierdo_franja_superior": "def_right",
+            "centro_del_campo_franja_baja": "mid_left",
+            "centro_del_campo_franja_media": "mid_center",
+            "centro_del_campo_franja_superior": "mid_right",
+            "lado_derecho_franja_baja": "off_left",
+            "lado_derecho_franja_media": "off_center",
+            "lado_derecho_franja_superior": "off_right",
+        }
+        return aliases.get(key, key)
+
+    def _zone_display_name(self, zone_name: str) -> str:
+        """Etiqueta legible y estable para UI/mensajes, independientemente del origen."""
+        canon = self._normalize_zone_name(zone_name)
+        labels = {
+            "def_left": "Lado izquierdo - franja baja",
+            "def_center": "Lado izquierdo - franja media",
+            "def_right": "Lado izquierdo - franja superior",
+            "mid_left": "Centro del campo - franja baja",
+            "mid_center": "Centro del campo - franja media",
+            "mid_right": "Centro del campo - franja superior",
+            "off_left": "Lado derecho - franja baja",
+            "off_center": "Lado derecho - franja media",
+            "off_right": "Lado derecho - franja superior",
+        }
+        return labels.get(canon, canon.replace("_", " "))
 
     def _build_zone_name_map(self, num_zones: int, partition_type: str) -> Dict[int, str]:
         """Genera nombres de zona canónicos cuando no vienen en el payload."""
@@ -502,7 +586,12 @@ class MatchAlertSystem:
                     team_id=team_id,
                     data={
                         'opponent_offensive_pressure': opponent_offensive_pressure * 100,
-                        'zones_affected': ['off_left', 'off_center', 'off_right']
+                        'zones_affected': ['off_left', 'off_center', 'off_right'],
+                        'zones_affected_labels': [
+                            self._zone_display_name('off_left'),
+                            self._zone_display_name('off_center'),
+                            self._zone_display_name('off_right'),
+                        ],
                     }
                 )
                 alerts.append(alert)
@@ -624,7 +713,10 @@ class MatchAlertSystem:
 
                 analysis = zone_analysis[team_id]
                 concentration = analysis.get('concentration', 0)
-                dominant_zones = analysis.get('dominant_zones', [])
+                dominant_zones = [
+                    self._normalize_zone_name(z) for z in analysis.get('dominant_zones', [])
+                ]
+                dominant_zones_labels = [self._zone_display_name(z) for z in dominant_zones]
 
                 # Alerta si concentración es notable (>60%)
                 if concentration >= 0.60 and len(dominant_zones) <= 3:
@@ -633,7 +725,7 @@ class MatchAlertSystem:
                     if not self.can_send_alert(alert_key):
                         continue
 
-                    zones_str = ', '.join(dominant_zones) if dominant_zones else "zona central"
+                    zones_str = ', '.join(dominant_zones_labels) if dominant_zones_labels else "zona central"
 
                     alert = self._create_alert(
                         frame_id=frame_id,
@@ -644,6 +736,7 @@ class MatchAlertSystem:
                         team_id=team_id,
                         data={
                             'dominant_zones': dominant_zones,
+                            'dominant_zones_labels': dominant_zones_labels,
                             'concentration': concentration,
                             'pattern': analysis.get('pattern', 'unknown')
                         }
@@ -710,106 +803,114 @@ class MatchAlertSystem:
         dominant = tuple((alert.data or {}).get('dominant_zones', [])[:2])
         return (alert.type, alert.team_id, alert.severity, dominant)
 
+    def _map_prediction_severity_to_alert(self, sev: str) -> str:
+        return {"low": "info", "medium": "warning", "high": "critical"}.get(sev, "info")
+
+    def _legacy_predicted_events_from_predictions(self, preds: List[Any]) -> Dict[str, float]:
+        """Compatibilidad con static/app.js (porcentajes derivados solo del motor)."""
+        by_type: Dict[str, float] = {}
+        for p in preds:
+            et = getattr(p, "event_type", "")
+            prob = float(getattr(p, "probability", 0.0))
+            by_type[et] = max(by_type.get(et, 0.0), prob * 100.0)
+        shot_p = by_type.get("shot", 0.0)
+        return {
+            "shot": round(shot_p, 1),
+            "goal": round(min(95.0, shot_p * 0.35), 1),
+            "corner": round(by_type.get("corner", 0.0), 1),
+            "foul_in_danger_zone": round(by_type.get("dangerous_turnover", 0.0), 1),
+        }
+
     def _check_predictive_events(
         self,
         frame_id: int,
         possession_stats: Dict,
         spatial_stats: Optional[Dict],
-        possession_percent: Dict
+        possession_percent: Dict,
+        prediction_context: Optional[Dict] = None,
     ) -> List[Alert]:
         """
-        Predice eventos de riesgo en la próxima ventana temporal:
-        tiro, gol, córner o falta en zonas peligrosas.
+        Predicciones calculadas en código; Anthropic solo redacta el mensaje final.
         """
-        alerts = []
-        if not spatial_stats:
+        alerts: List[Alert] = []
+        if (
+            not spatial_stats
+            or not self._prediction_engine
+            or not self._prediction_dispatcher
+            or not build_prediction_match_state
+            or not format_prediction_alert
+        ):
             return alerts
 
-        spatial_stats = self._normalize_spatial_stats(spatial_stats)
-        zone_percentages = spatial_stats.get('zone_percentages', {})
-        partition_type = spatial_stats.get('partition_type', 'thirds_lanes')
-        if partition_type != 'thirds_lanes':
+        spatial_norm = self._normalize_spatial_stats(spatial_stats)
+        if spatial_norm.get("partition_type", "thirds_lanes") != "thirds_lanes":
+            logger.debug("prediction: skip partition_type=%s", spatial_norm.get("partition_type"))
             return alerts
 
-        recent_events = spatial_stats.get('recent_events', [])
-        total_frames = sum(possession_stats.get('frames_by_team', {}).values())
-        total_minutes = max((total_frames / self.fps) / 60.0, 0.1)
-        possession_changes = possession_stats.get('possession_changes', 0)
-        game_intensity = min(1.0, (possession_changes / total_minutes) / 20.0)
+        pc = prediction_context or {}
 
-        for team_id in [0, 1]:
-            zone_pct = zone_percentages.get(team_id) or zone_percentages.get(str(team_id))
-            if not zone_pct or len(zone_pct) < 9:
-                continue
-
-            team_passes_recent = sum(
-                1 for event in recent_events
-                if event.get('type') == 'pass' and event.get('team') == team_id
+        try:
+            pstate = build_prediction_match_state(
+                frame_id=frame_id,
+                fps=self.fps,
+                possession_stats=possession_stats,
+                spatial_stats=spatial_norm,
+                recent_events=spatial_norm.get("recent_events"),
+                possession_timeline=pc.get("possession_timeline"),
+                ball_field_xy_m=pc.get("ball_field_xy_m"),
+                calibration_valid=bool(pc.get("calibration_valid")),
             )
-            pass_momentum = min(1.0, team_passes_recent / 8.0)
-            offensive_pressure = float(sum(zone_pct[6:9])) / 100.0
-            midfield_control = float(sum(zone_pct[3:6])) / 100.0
-            possession_ratio = max(0.0, min(1.0, possession_percent.get(team_id, 0.0) / 100.0))
+        except Exception as e:
+            logger.error("build_prediction_match_state failed: %s", e)
+            return alerts
 
-            danger_index = (
-                (offensive_pressure * 0.45) +
-                (possession_ratio * 0.25) +
-                (pass_momentum * 0.20) +
-                (midfield_control * 0.10)
+        raw_preds = self._prediction_engine.predict(pstate)
+        raw_preds = sorted(raw_preds, key=lambda p: p.probability, reverse=True)[:8]
+        emitted = self._prediction_dispatcher.filter_predictions(raw_preds, frame_id)
+
+        if not emitted:
+            logger.debug("prediction: no emissions after dispatcher frame=%s", frame_id)
+            return alerts
+
+        min_iv = float(self._prediction_cfg.get("min_anthropic_interval_sec", 4.0))
+        phrases: Dict[str, str] = {}
+        if self._prediction_narrator:
+            phrases = self._prediction_narrator.narrate_batch(
+                pstate, emitted, min_interval_sec=min_iv
             )
+        else:
+            phrases = {p.id: format_prediction_alert(p, None) for p in emitted}
 
-            if danger_index < 0.52:
-                continue
+        legacy = self._legacy_predicted_events_from_predictions(emitted)
+        structured_dump = [p.model_dump() for p in emitted]
 
-            shot_prob = min(0.95, (danger_index * 1.10))
-            goal_prob = min(0.70, (offensive_pressure * 0.45) + (pass_momentum * 0.30) + (possession_ratio * 0.20))
-            corner_prob = min(0.80, (offensive_pressure * 0.55) + (pass_momentum * 0.20) + ((1.0 - possession_ratio) * 0.10))
-            foul_prob = min(0.75, (offensive_pressure * 0.35) + (game_intensity * 0.40) + (pass_momentum * 0.15))
-
-            predicted_events = {
-                'shot': round(shot_prob * 100, 1),
-                'goal': round(goal_prob * 100, 1),
-                'corner': round(corner_prob * 100, 1),
-                'foul_in_danger_zone': round(foul_prob * 100, 1),
-            }
-
-            zone_name_map = spatial_stats.get('zone_names_map', {})
-            offensive_zones = [(idx, zone_pct[idx]) for idx in [6, 7, 8]]
-            offensive_zones.sort(key=lambda item: item[1], reverse=True)
-            dangerous_zones = [zone_name_map.get(idx, f"zone_{idx}") for idx, pct in offensive_zones if pct > 0][:2]
-            zones_text = ', '.join(dangerous_zones) if dangerous_zones else "off_center"
-
-            alert_key = f"prediction_team{team_id}"
-            if not self.can_send_alert(alert_key):
-                continue
-
-            horizon_minutes = 2
-            message = (
-                f"Predicción ({horizon_minutes} min): tiro {predicted_events['shot']:.0f}%, "
-                f"gol {predicted_events['goal']:.0f}%, córner {predicted_events['corner']:.0f}%, "
-                f"falta peligrosa {predicted_events['foul_in_danger_zone']:.0f}%. "
-                f"Zonas de mayor amenaza: {zones_text}."
-            )
-
-            severity = "warning" if shot_prob >= 0.75 or goal_prob >= 0.45 else "info"
+        for pred in emitted:
+            msg = format_prediction_alert(pred, phrases.get(pred.id))
             alert = self._create_alert(
                 frame_id=frame_id,
                 alert_type="prediction",
-                severity=severity,
-                title=f"🔮 Predicción ofensiva - Equipo {team_id}",
-                message=message,
-                team_id=team_id,
+                severity=self._map_prediction_severity_to_alert(pred.severity),
+                title=f"🔮 {pred.title}",
+                message=msg,
+                team_id=pred.team_id,
                 data={
-                    'prediction_window_minutes': horizon_minutes,
-                    'predicted_events': predicted_events,
-                    'danger_index': round(danger_index, 3),
-                    'dangerous_zones': dangerous_zones,
-                    'team_passes_recent': team_passes_recent,
-                }
+                    "event_prediction": pred.model_dump(),
+                    "structured_predictions": structured_dump,
+                    "predicted_events": legacy,
+                    "prediction_engine": "event_prediction_engine",
+                    "narrative_model": "claude-3-5-sonnet-20241022"
+                    if self._prediction_narrator and self._prediction_narrator.client
+                    else "deterministic_fallback",
+                },
             )
             alerts.append(alert)
-            self._mark_alert_sent(alert_key)
 
+        logger.info(
+            "prediction alerts frame=%s count=%s types=%s",
+            frame_id,
+            len(alerts),
+            [p.event_type for p in emitted],
+        )
         return alerts
 
     def _check_passing_chain_efficiency(self, frame_id: int, events: Optional[List[Dict]] = None) -> List[Alert]:

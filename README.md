@@ -15,6 +15,25 @@ TacticEYE2 is a real-time football video analytics system with a full web interf
 - Deterministic possession engine (`PossessionTrackerV2`)
 - Automatic pass counter by team
 - Improved team classification stability with `TeamClassifierV2`
+- **Event prediction (algorithmic)**: short-horizon risk signals with optional Claude narrative (see below)
+
+## Event prediction (real time)
+
+The pipeline builds a structured `MatchState` ([`schemas/predictions.py`](schemas/predictions.py)), derives heuristic metrics ([`modules/prediction_metrics.py`](modules/prediction_metrics.py)), scores six event families with linear weights + sigmoid in [`modules/event_prediction_engine.py`](modules/event_prediction_engine.py), then deduplicates with [`modules/prediction_dispatcher.py`](modules/prediction_dispatcher.py). **Probabilities and severities always come from code**, not from the LLM.
+
+Anthropic ([`modules/prediction_anthropic.py`](modules/prediction_anthropic.py)) only formats JSON-validated Spanish phrases from the structured predictions; if the API is missing or parsing fails, deterministic fallback text is used.
+
+**Configuration**: [`config/predictions.yaml`](config/predictions.yaml) (weights per event, thresholds, horizons, cooldowns). Loaded via [`modules/prediction_config.py`](modules/prediction_config.py).
+
+**Integration**: [`modules/batch_processor.py`](modules/batch_processor.py) passes `prediction_context` (ball field projection when calibrated, possession timeline) into [`modules/match_alert_system.py`](modules/match_alert_system.py). Alerts keep `type: "prediction"` for the chatbot; `data.predicted_events` remains compatible with the legacy UI percentages mapping.
+
+**Try it**:
+
+```bash
+pip install pydantic
+PYTHONPATH=. pytest tests/test_prediction_engine.py tests/test_alerts.py -v
+PYTHONPATH=. python examples/prediction_standalone_demo.py
+```
 
 ## Core Features
 

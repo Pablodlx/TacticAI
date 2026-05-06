@@ -1017,10 +1017,45 @@ function updateSpatialStats(spatial) {
         updateHeatmapImages();
     }
     
-    // Mostrar top zonas
-    if (spatial.zone_percentages) {
-        updateTopZones(0, spatial.zone_percentages['0'] || spatial.zone_percentages[0]);
-        updateTopZones(1, spatial.zone_percentages['1'] || spatial.zone_percentages[1]);
+    // Mostrar top zonas (soporta múltiples formatos de payload y fallback)
+    updateTopZonesFromSpatial(0, spatial);
+    updateTopZonesFromSpatial(1, spatial);
+}
+
+function getTeamZonePercentagesFromSpatial(teamId, spatial) {
+    if (!spatial) return null;
+
+    const zp = spatial.zone_percentages || {};
+    const pbz = spatial.possession_by_zone || {};
+
+    const candidates = [
+        zp[teamId],
+        zp[String(teamId)],
+        zp[`team_${teamId}`],
+        zp[`team${teamId}`],
+        pbz[teamId],
+        pbz[String(teamId)],
+        pbz[`team_${teamId}`],
+        pbz[`team${teamId}`]
+    ];
+
+    for (const candidate of candidates) {
+        if (Array.isArray(candidate)) {
+            // Si viene desde possession_by_zone (frames), normalizar a porcentajes
+            const sum = candidate.reduce((acc, val) => acc + (Number(val) || 0), 0);
+            if (sum > 0 && (spatial.zone_percentages == null || candidate === pbz[teamId] || candidate === pbz[String(teamId)] || candidate === pbz[`team_${teamId}`] || candidate === pbz[`team${teamId}`])) {
+                return candidate.map((v) => ((Number(v) || 0) / sum) * 100);
+            }
+            return candidate.map((v) => Number(v) || 0);
+        }
+    }
+    return null;
+}
+
+function updateTopZonesFromSpatial(teamId, spatial) {
+    const zonePercentages = getTeamZonePercentagesFromSpatial(teamId, spatial);
+    if (zonePercentages) {
+        updateTopZones(teamId, zonePercentages);
     }
 }
 
@@ -1151,6 +1186,22 @@ function formatZoneName(zoneName) {
     return zoneLabelMap[zoneName] || zoneName.replaceAll('_', ' ');
 }
 
+function normalizeZoneNamesInText(text) {
+    if (!text || typeof text !== 'string') return text || '';
+    const keys = [
+        'def_left', 'def_center', 'def_right',
+        'mid_left', 'mid_center', 'mid_right',
+        'off_left', 'off_center', 'off_right'
+    ];
+    let output = text;
+    for (const key of keys) {
+        const label = formatZoneName(key);
+        const regex = new RegExp(`\\b${key}\\b`, 'g');
+        output = output.replace(regex, label);
+    }
+    return output;
+}
+
 // Función para mostrar el resumen de heatmaps
 function showHeatmapSummary() {
     if (!currentSessionId) {
@@ -1245,7 +1296,8 @@ function addAlertToChatbot(alert) {
         predictionHint = `\nProbabilidades: tiro ${predicted.shot ?? 0}%, gol ${predicted.goal ?? 0}%, córner ${predicted.corner ?? 0}%, falta peligrosa ${predicted.foul_in_danger_zone ?? 0}%.`;
     }
 
-    const enrichedMessage = `${alert.message || ''}${predictionHint}${contextualHint}`;
+    const normalizedAlertMessage = normalizeZoneNamesInText(alert.message || '');
+    const enrichedMessage = `${normalizedAlertMessage}${predictionHint}${contextualHint}`;
     const relevanceBadge = (typeof relevanceScore === 'number')
         ? `<span class="badge bg-dark-subtle text-dark ms-2">Relevancia ${(relevanceScore * 100).toFixed(0)}%</span>`
         : '';

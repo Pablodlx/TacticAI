@@ -611,6 +611,8 @@ class BatchProcessor:
 
         # Procesar cada frame del chunk
         current_keypoints = None
+        prediction_ball_field_xy = None
+        prediction_cal_valid = False
         for i, frame in enumerate(frames):
             frame_idx = start_frame_idx + i
             
@@ -914,6 +916,19 @@ class BatchProcessor:
                     'calibration_valid': spatial_state.get('calibration_valid', False),
                     'position_fallback': spatial_state.get('position_fallback', False)
                 }
+
+                # Proyección del balón al campo (predicción / estado estructurado)
+                if ball_bbox is not None and self.field_calibrator is not None:
+                    try:
+                        if self.field_calibrator.has_valid_calibration():
+                            bx = (float(ball_bbox[0]) + float(ball_bbox[2])) / 2.0
+                            by = float(ball_bbox[3])
+                            fp = self.field_calibrator.image_to_field(bx, by)
+                            if fp is not None:
+                                prediction_ball_field_xy = (float(fp[0]), float(fp[1]))
+                                prediction_cal_valid = True
+                    except Exception:
+                        pass
             
             # Detectar cambio de equipo
             new_possession_team = self.possession_tracker.current_possession_team
@@ -1135,12 +1150,19 @@ class BatchProcessor:
 
                     if recent_pass_events:
                         spatial_stats_for_alerts['recent_events'] = recent_pass_events
+
+                prediction_context = {
+                    "ball_field_xy_m": prediction_ball_field_xy,
+                    "calibration_valid": prediction_cal_valid,
+                    "possession_timeline": self.possession_tracker.get_possession_timeline(),
+                }
                 
                 # Generar alertas (frame_id es el argumento correcto)
                 alerts = self.alert_system.analyze_and_generate_alerts(
                     frame_id=end_frame_idx,
                     possession_stats=possession_stats_for_alerts,
-                    spatial_stats=spatial_stats_for_alerts
+                    spatial_stats=spatial_stats_for_alerts,
+                    prediction_context=prediction_context,
                 )
                 
                 # Agregar alertas al chunk_stats
