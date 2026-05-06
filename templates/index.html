@@ -255,6 +255,45 @@
                                     </div>
                                 </div>
                                 <div class="card-body">
+                                    <div class="alert alert-light border mb-3">
+                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                            <strong><i class="fas fa-compass me-2"></i>Attack Direction Control</strong>
+                                            <span id="attack-direction-badge" class="badge bg-secondary">mode: auto</span>
+                                        </div>
+                                        <div class="row g-2 align-items-end">
+                                            <div class="col-md-2">
+                                                <label class="form-label mb-1">Mode</label>
+                                                <select id="attack-direction-mode" class="form-select form-select-sm">
+                                                    <option value="manual">MANUAL</option>
+                                                </select>
+                                            </div>
+                                            <div class="col-md-2">
+                                                <label class="form-label mb-1">Period</label>
+                                                <select id="attack-direction-period" class="form-select form-select-sm">
+                                                    <option value="1">1</option>
+                                                    <option value="2">2</option>
+                                                </select>
+                                            </div>
+                                            <div class="col-md-3">
+                                                <label class="form-label mb-1">Team 0 attacks to</label>
+                                                <select id="attack-direction-team0" class="form-select form-select-sm">
+                                                    <option value="right">right</option>
+                                                    <option value="left">left</option>
+                                                </select>
+                                            </div>
+                                            <div class="col-md-5 d-flex gap-2">
+                                                <button id="attack-direction-apply-btn" class="btn btn-sm btn-primary">
+                                                    <i class="fas fa-check me-1"></i>Aplicar
+                                                </button>
+                                                <button id="attack-direction-auto-btn" class="btn btn-sm btn-outline-secondary">
+                                                    <i class="fas fa-eraser me-1"></i>Limpiar selección
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <small id="attack-direction-state-text" class="text-muted d-block mt-2">
+                                            mode=manual | period=1 | team_0_attacks_to=? | team_1_attacks_to=? | confidence=0.00 | source=manual_override
+                                        </small>
+                                    </div>
                                     <div class="row">
                                         <div class="col-lg-6 mb-3">
                                             <h6 class="text-center text-success mb-3">Team 0 - Heat Map</h6>

@@ -111,7 +111,8 @@ class MatchAlertSystem:
         self.LONG_NO_PASS_THRESHOLD_SECONDS = 30.0  # Segundos sin pases
         self.ZONE_PRESSURE_THRESHOLD = 0.55  # 55% posesión rival en zona defensiva
         self.POSSESSION_SWING_THRESHOLD = 15.0  # Cambio de % para detectar giro de partido
-        self.SUMMARY_INTERVAL_SECONDS = 90.0  # Resumen cada 90 segundos
+        self.SUMMARY_INTERVAL_SECONDS = 300.0  # Resumen cada 5 minutos
+        self.POSSESSION_TREND_HORIZON_SECONDS = 180.0  # Cambios de tendencia >= 3 minutos
         self.last_summary_time = 0.0
 
         # === TACTICAL ANALYZER ===
@@ -136,9 +137,14 @@ class MatchAlertSystem:
         self._prediction_engine = None
         self._prediction_dispatcher = None
         self._prediction_narrator = None
+        self._last_prediction_alert_time = 0.0
+        self._min_prediction_interval_sec = 18.0
         if load_prediction_config and EventPredictionEngine and PredictionDispatcher:
             try:
                 self._prediction_cfg = load_prediction_config()
+                self._min_prediction_interval_sec = float(
+                    self._prediction_cfg.get("min_prediction_interval_sec", 18.0)
+                )
                 self._prediction_engine = EventPredictionEngine(self._prediction_cfg)
                 self._prediction_dispatcher = PredictionDispatcher(self._prediction_cfg)
                 if PredictionAnthropicClient:
@@ -355,15 +361,15 @@ class MatchAlertSystem:
         """Etiqueta legible y estable para UI/mensajes, independientemente del origen."""
         canon = self._normalize_zone_name(zone_name)
         labels = {
-            "def_left": "Lado izquierdo - franja baja",
-            "def_center": "Lado izquierdo - franja media",
-            "def_right": "Lado izquierdo - franja superior",
-            "mid_left": "Centro del campo - franja baja",
-            "mid_center": "Centro del campo - franja media",
-            "mid_right": "Centro del campo - franja superior",
-            "off_left": "Lado derecho - franja baja",
-            "off_center": "Lado derecho - franja media",
-            "off_right": "Lado derecho - franja superior",
+            "def_left": "Defensa - Inferior",
+            "def_center": "Defensa - Medio",
+            "def_right": "Defensa - Superior",
+            "mid_left": "Centro - Inferior",
+            "mid_center": "Centro - Medio",
+            "mid_right": "Centro - Superior",
+            "off_left": "Ataque - Inferior",
+            "off_center": "Ataque - Medio",
+            "off_right": "Ataque - Superior",
         }
         return labels.get(canon, canon.replace("_", " "))
 
@@ -466,8 +472,17 @@ class MatchAlertSystem:
         if len(self.possession_history) < 2:
             return alerts
         
-        # Comparar con medición anterior (hace ~30 segundos)
-        prev_frame, prev_possession = self.possession_history[-2]
+        # Comparar con medición de al menos 3 minutos atrás
+        target_frame = frame_id - int(self.POSSESSION_TREND_HORIZON_SECONDS * self.fps)
+        prev_frame, prev_possession = self.possession_history[0]
+        found = False
+        for hist_frame, hist_possession in reversed(self.possession_history):
+            if hist_frame <= target_frame:
+                prev_frame, prev_possession = hist_frame, hist_possession
+                found = True
+                break
+        if not found:
+            return alerts
         
         alert_type = "possession_swing"
         if not self.can_send_alert(alert_type):
@@ -487,7 +502,10 @@ class MatchAlertSystem:
                     alert_type="tactical",
                     severity="info",
                     title=f"{emoji} Cambio de momentum - Equipo {team_id}",
-                    message=f"El Equipo {team_id} ha {direction} {abs(swing):.1f}% de posesión en el último minuto. El partido está cambiando.",
+                    message=(
+                        f"El Equipo {team_id} ha {direction} {abs(swing):.1f}% de posesión "
+                        f"en la ventana de los últimos 3 minutos. Se detecta cambio de tendencia."
+                    ),
                     team_id=team_id,
                     data={
                         'swing': swing,
@@ -821,6 +839,70 @@ class MatchAlertSystem:
             "foul_in_danger_zone": round(by_type.get("dangerous_turnover", 0.0), 1),
         }
 
+    def _contextual_prediction_adjustment(
+        self,
+        pred: Any,
+        pstate: Any,
+    ) -> tuple[float, List[str]]:
+        """
+        Ajusta probabilidad en base a patrones zonales conocidos y devuelve razones legibles.
+        """
+        team_id = getattr(pred, "team_id", None)
+        if team_id not in (0, 1):
+            return float(getattr(pred, "probability", 0.0)), []
+
+        zone_pct = pstate.zone_percentages_by_team.get(team_id, [])
+        if not zone_pct or len(zone_pct) < 9:
+            return float(getattr(pred, "probability", 0.0)), []
+
+        off_low = float(zone_pct[6]) / 100.0
+        off_mid = float(zone_pct[7]) / 100.0
+        off_high = float(zone_pct[8]) / 100.0
+        off_wide = off_low + off_high
+        off_total = off_low + off_mid + off_high
+        ball_zone = str(getattr(pstate, "ball_zone", "") or "")
+
+        boosted_prob = float(getattr(pred, "probability", 0.0))
+        reasons: List[str] = []
+        event_type = getattr(pred, "event_type", "")
+
+        if event_type == "corner" and off_wide >= 0.40:
+            boost = min(0.10, 0.04 + max(0.0, off_wide - 0.40) * 0.20)
+            boosted_prob += boost
+            reasons.append(
+                f"posesión en bandas ofensivas superior+inferior {off_wide * 100:.0f}% (patrón favorable para córner)"
+            )
+
+        if event_type == "shot" and off_mid >= 0.26:
+            boost = min(0.09, 0.03 + max(0.0, off_mid - 0.26) * 0.25)
+            boosted_prob += boost
+            reasons.append(
+                f"concentración en ataque-centro {off_mid * 100:.0f}% (mejora ángulo de tiro)"
+            )
+        elif event_type == "shot" and ball_zone == "off_center":
+            boosted_prob += 0.04
+            reasons.append("balón en ataque-centro (zona de finalización)")
+
+        if event_type == "dangerous_transition" and off_total >= 0.52:
+            boost = min(0.12, 0.04 + max(0.0, off_total - 0.52) * 0.24)
+            boosted_prob += boost
+            reasons.append(
+                f"alta acumulación de jugadores en ataque {off_total * 100:.0f}% (riesgo de transición)"
+            )
+
+        boosted_prob = max(0.0, min(0.98, boosted_prob))
+        return boosted_prob, reasons
+
+    def _severity_from_probability(self, probability: float) -> str:
+        sev_cfg = self._prediction_cfg.get("severity") or {}
+        p_med = float(sev_cfg.get("medium_probability", 0.64))
+        p_high = float(sev_cfg.get("high_probability", 0.78))
+        if probability >= p_high:
+            return "high"
+        if probability >= p_med:
+            return "medium"
+        return "low"
+
     def _check_predictive_events(
         self,
         frame_id: int,
@@ -842,6 +924,15 @@ class MatchAlertSystem:
         ):
             return alerts
 
+        now = time.time()
+        if (now - self._last_prediction_alert_time) < self._min_prediction_interval_sec:
+            logger.debug(
+                "prediction: global interval skip frame=%s dt=%.2fs",
+                frame_id,
+                now - self._last_prediction_alert_time,
+            )
+            return alerts
+
         spatial_norm = self._normalize_spatial_stats(spatial_stats)
         if spatial_norm.get("partition_type", "thirds_lanes") != "thirds_lanes":
             logger.debug("prediction: skip partition_type=%s", spatial_norm.get("partition_type"))
@@ -859,14 +950,29 @@ class MatchAlertSystem:
                 possession_timeline=pc.get("possession_timeline"),
                 ball_field_xy_m=pc.get("ball_field_xy_m"),
                 calibration_valid=bool(pc.get("calibration_valid")),
+                attack_direction_state=pc.get("attack_direction_state"),
             )
         except Exception as e:
             logger.error("build_prediction_match_state failed: %s", e)
             return alerts
 
         raw_preds = self._prediction_engine.predict(pstate)
-        raw_preds = sorted(raw_preds, key=lambda p: p.probability, reverse=True)[:8]
+        # Hacer el pre-filtro menos estricto y reforzar por contexto zonal.
+        strong_cutoff = float(self._prediction_cfg.get("min_probability_to_emit", 0.58))
+        adjusted_preds = []
+        for pred in raw_preds:
+            boosted_prob, reasons = self._contextual_prediction_adjustment(pred, pstate)
+            if boosted_prob != pred.probability:
+                pred.probability = boosted_prob
+                pred.severity = self._severity_from_probability(boosted_prob)
+            if reasons:
+                pred.evidence.extend([f"contexto_zonal:{r}" for r in reasons])
+            if pred.probability >= strong_cutoff:
+                adjusted_preds.append(pred)
+        raw_preds = adjusted_preds
+        raw_preds = sorted(raw_preds, key=lambda p: p.probability, reverse=True)[:6]
         emitted = self._prediction_dispatcher.filter_predictions(raw_preds, frame_id)
+        emitted = emitted[:1]
 
         if not emitted:
             logger.debug("prediction: no emissions after dispatcher frame=%s", frame_id)
@@ -886,6 +992,16 @@ class MatchAlertSystem:
 
         for pred in emitted:
             msg = format_prediction_alert(pred, phrases.get(pred.id))
+            tc = pstate.team_context.get(str(pred.team_id), None) if pred.team_id is not None else None
+            if tc and getattr(tc, "attacking_side", None):
+                msg = f"{msg} Contexto: banda ofensiva {tc.attacking_side}."
+            contextual_reasons = [
+                e.replace("contexto_zonal:", "")
+                for e in getattr(pred, "evidence", [])
+                if isinstance(e, str) and e.startswith("contexto_zonal:")
+            ][:2]
+            if contextual_reasons:
+                msg = f"{msg} Lectura zonal: {'; '.join(contextual_reasons)}."
             alert = self._create_alert(
                 frame_id=frame_id,
                 alert_type="prediction",
@@ -897,6 +1013,10 @@ class MatchAlertSystem:
                     "event_prediction": pred.model_dump(),
                     "structured_predictions": structured_dump,
                     "predicted_events": legacy,
+                    "attack_direction": pstate.attack_direction.model_dump(),
+                    "team_context": pstate.team_context.get(str(pred.team_id), {}).model_dump()
+                    if hasattr(pstate.team_context.get(str(pred.team_id), {}), "model_dump")
+                    else pstate.team_context.get(str(pred.team_id), {}),
                     "prediction_engine": "event_prediction_engine",
                     "narrative_model": "claude-3-5-sonnet-20241022"
                     if self._prediction_narrator and self._prediction_narrator.client
@@ -904,6 +1024,7 @@ class MatchAlertSystem:
                 },
             )
             alerts.append(alert)
+            self._last_prediction_alert_time = time.time()
 
         logger.info(
             "prediction alerts frame=%s count=%s types=%s",

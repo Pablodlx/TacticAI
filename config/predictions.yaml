@@ -2,18 +2,23 @@
 # Rutas relativas al directorio del proyecto.
 
 sigmoid_scale: 1.35
-min_probability_to_emit: 0.42
-deduplication_window_sec: 18.0
+min_probability_to_emit: 0.56
+deduplication_window_sec: 35.0
 cooldown_sec_by_event:
-  dangerous_attack: 25.0
-  shot: 20.0
-  corner: 22.0
-  dangerous_transition: 18.0
-  final_third_entry: 14.0
-  dangerous_turnover: 20.0
+  dangerous_attack: 40.0
+  shot: 34.0
+  corner: 36.0
+  dangerous_transition: 32.0
+  final_third_entry: 28.0
+  dangerous_turnover: 34.0
 
 # Si prob sube al menos este delta respecto a la última emisión, se permite repetir antes del cooldown
-probability_surge_delta: 0.12
+probability_surge_delta: 0.15
+min_probability_delta_to_repeat: 0.08
+max_predictions_per_cycle: 1
+max_predictions_per_team_per_cycle: 1
+max_history_records: 800
+min_prediction_interval_sec: 18.0
 
 min_anthropic_interval_sec: 4.0
 
@@ -78,5 +83,5 @@ events:
     threshold_score: 0.13
 
 severity:
-  medium_probability: 0.58
-  high_probability: 0.72
+  medium_probability: 0.64
+  high_probability: 0.78

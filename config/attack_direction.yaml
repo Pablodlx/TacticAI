@@ -1,0 +1,8 @@
+mode_default: manual
+reset_on_period_change: true
+inference_window_samples: 40
+min_direction_votes: 4
+min_mean_delta_x_m: 1.2
+confidence_threshold: 0.55
+stable_change_margin: 0.15
+allow_auto_inference: false

@@ -30,6 +30,8 @@ try:
     from modules.video_sources import open_source, SourceType
     from modules.match_analyzer import run_match_analysis, AnalysisConfig
     from modules.match_state import FileSystemStorage
+    from modules.attack_direction_manager import AttackDirectionManager
+    from schemas.predictions import AttackDirectionOverrideRequest
     # Sistema de heatmaps con resolución de flip
     from modules.field_heatmap_system import (
         FIELD_POINTS,
@@ -69,6 +71,7 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 # Estado global de análisis
 analysis_state: Dict[str, dict] = {}
+attack_direction_managers: Dict[str, "AttackDirectionManager"] = {}
 
 # Filtro anti-outliers para renderizado de heatmaps
 HEATMAP_GOAL_LINE_MARGIN_M = 2.0
@@ -158,6 +161,14 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+def get_attack_direction_manager(session_id: str) -> "AttackDirectionManager":
+    adm = attack_direction_managers.get(session_id)
+    if adm is None:
+        adm = AttackDirectionManager()
+        attack_direction_managers[session_id] = adm
+    return adm
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     """Página principal"""
@@ -203,7 +214,8 @@ async def upload_video(file: UploadFile = File(...)):
             "filename": file.filename,
             "file_path": str(file_path),
             "progress": 0,
-            "stats": None
+            "stats": None,
+            "attack_direction": get_attack_direction_manager(session_id).get_current_state(),
         }
 
         return JSONResponse({
@@ -248,7 +260,8 @@ async def analyze_from_url(request: Request):
             "source_type": source_type_str,
             "source_url": source_url,
             "progress": 0,
-            "stats": None
+            "stats": None,
+            "attack_direction": get_attack_direction_manager(session_id).get_current_state(),
         }
         
         # Ejecutar análisis en background con nuevo sistema
@@ -311,6 +324,52 @@ async def get_status(session_id: str):
         "success": True,
         "data": analysis_state[session_id]
     })
+
+
+@app.get("/api/attack-direction")
+async def get_attack_direction(session_id: str):
+    if session_id not in analysis_state:
+        return JSONResponse({"success": False, "error": "Sesión no encontrada"}, status_code=404)
+    adm = get_attack_direction_manager(session_id)
+    state = adm.get_current_state()
+    analysis_state[session_id]["attack_direction"] = state
+    return JSONResponse({"success": True, "session_id": session_id, "state": state})
+
+
+@app.post("/api/attack-direction/manual")
+async def set_attack_direction_manual(payload: AttackDirectionOverrideRequest):
+    session_id = payload.session_id
+    if session_id not in analysis_state:
+        return JSONResponse({"success": False, "error": "Sesión no encontrada"}, status_code=404)
+    adm = get_attack_direction_manager(session_id)
+    state = adm.set_manual_override(payload.period, payload.team_0_attacks_to)
+    analysis_state[session_id]["attack_direction"] = state
+    await manager.send_update(session_id, {"type": "attack_direction", "state": state})
+    return JSONResponse({"success": True, "session_id": session_id, "state": state})
+
+
+@app.post("/api/attack-direction/auto")
+async def set_attack_direction_auto(request: Request):
+    return JSONResponse(
+        {
+            "success": False,
+            "error": "Modo AUTO deshabilitado. Usa /api/attack-direction/manual.",
+        },
+        status_code=400,
+    )
+
+
+@app.post("/api/attack-direction/clear")
+async def clear_attack_direction_manual(request: Request):
+    data = await request.json()
+    session_id = data.get("session_id")
+    if not session_id or session_id not in analysis_state:
+        return JSONResponse({"success": False, "error": "Sesión no encontrada"}, status_code=404)
+    adm = get_attack_direction_manager(session_id)
+    state = adm.clear_manual_override()
+    analysis_state[session_id]["attack_direction"] = state
+    await manager.send_update(session_id, {"type": "attack_direction", "state": state})
+    return JSONResponse({"success": True, "session_id": session_id, "state": state})
 
 
 async def generate_keypoints_heatmap(data_file, team_id: int, session_id: str):
@@ -871,6 +930,8 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
+        attack_direction_manager = get_attack_direction_manager(session_id)
+
         # Callbacks para progreso
         def on_progress(match_id, batch_idx, frames_processed, total_frames):
             try:
@@ -939,6 +1000,8 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
                 
                 # Estadísticas espaciales
                 spatial_stats = chunk_stats.get('spatial', {})
+                attack_direction_state = chunk_stats.get('attack_direction') or attack_direction_manager.get_current_state()
+                analysis_state[session_id]["attack_direction"] = attack_direction_state
                 
                 # Enviar estadísticas del batch
                 loop.run_until_complete(manager.send_update(session_id, {
@@ -962,7 +1025,8 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
                             "zone_percentages": spatial_stats.get('zone_percentages', {}),
                             "partition_type": spatial_stats.get('zone_partition_type', 'thirds_lanes'),
                             "num_zones": spatial_stats.get('num_zones', 9)
-                        }
+                        },
+                        "attack_direction": attack_direction_state,
                     },
                     "message": f"✓ Batch {batch_idx + 1} completado: Team 0: {possession_percent[0]:.1f}%, Team 1: {possession_percent[1]:.1f}%"
                 }))
@@ -1007,7 +1071,8 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
             enable_spatial_tracking=True,
             zone_partition_type='thirds_lanes',
             enable_heatmaps=True,
-            heatmap_resolution=(50, 34)
+            heatmap_resolution=(50, 34),
+            attack_direction_manager=attack_direction_manager,
         )
         
         # Ejecutar análisis con micro-batching

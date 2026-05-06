@@ -64,6 +64,38 @@ class PredictionEvidence(BaseModel):
     value: Optional[float] = None
 
 
+AttackSide = Literal["left", "right"]
+OrientationMode = Literal["auto", "manual"]
+OrientationSource = Literal["auto_inference", "manual_override"]
+
+
+class TeamRoleContext(BaseModel):
+    attacking_side: Optional[AttackSide] = None
+    defending_side: Optional[AttackSide] = None
+    is_attacking: bool = False
+    is_defending: bool = False
+
+
+class AttackDirectionState(BaseModel):
+    mode: OrientationMode = "auto"
+    period: int = 1
+    team_0_attacks_to: Optional[AttackSide] = None
+    team_1_attacks_to: Optional[AttackSide] = None
+    confidence: float = Field(0.0, ge=0.0, le=1.0)
+    source: OrientationSource = "auto_inference"
+
+
+class AttackDirectionOverrideRequest(BaseModel):
+    session_id: str
+    period: int = 1
+    team_0_attacks_to: AttackSide
+
+
+class AttackDirectionResponse(BaseModel):
+    session_id: str
+    state: AttackDirectionState
+
+
 class MatchState(BaseModel):
     """Estado del partido para el motor predictivo (serializable)."""
 
@@ -92,6 +124,9 @@ class MatchState(BaseModel):
     zone_percentages_by_team: Dict[int, List[float]] = Field(default_factory=dict)
     zone_names: List[str] = Field(default_factory=list)
     partition_type: str = "thirds_lanes"
+    attack_direction: AttackDirectionState = Field(default_factory=AttackDirectionState)
+    orientation_mode: OrientationMode = "auto"
+    team_context: Dict[str, TeamRoleContext] = Field(default_factory=dict)
 
 
 SeverityLevel = Literal["low", "medium", "high"]

@@ -14,6 +14,7 @@ let resultsTimelineChart = null;
 let chatbotOpen = false;
 let unreadAlerts = 0;
 let alertHistory = [];
+let attackDirectionState = null;
 
 // Función para reiniciar la interfaz
 function resetInterface() {
@@ -140,17 +141,27 @@ document.addEventListener('DOMContentLoaded', function() {
     
     if (!fileInput || !fileUploadZone) {
         console.error('Missing required elements!');
+    } else {
+        fileInput.addEventListener('change', function(e) {
+            console.log('File selected:', this.files);
+            if (this.files && this.files[0]) {
+                fileName.textContent = this.files[0].name;
+                fileInfo.style.display = 'block';
+                console.log('File info displayed');
+            }
+        });
+    }
+
+    const applyDirBtn = document.getElementById('attack-direction-apply-btn');
+    const autoDirBtn = document.getElementById('attack-direction-auto-btn');
+    if (applyDirBtn) applyDirBtn.addEventListener('click', applyAttackDirectionControl);
+    if (autoDirBtn) autoDirBtn.addEventListener('click', clearAttackDirectionManualOverride);
+
+    renderAttackDirectionState();
+
+    if (!fileInput || !fileUploadZone) {
         return;
     }
-    
-    fileInput.addEventListener('change', function(e) {
-        console.log('File selected:', this.files);
-        if (this.files && this.files[0]) {
-            fileName.textContent = this.files[0].name;
-            fileInfo.style.display = 'block';
-            console.log('File info displayed');
-        }
-    });
     
     // Drag and drop
     fileUploadZone.addEventListener('dragover', (e) => {
@@ -238,6 +249,7 @@ async function analyzeFromUrl() {
         if (data.success) {
             currentSessionId = data.session_id;
             statusDiv.innerHTML = '<div class="alert alert-success"><i class="fas fa-check-circle me-2"></i>Stream connected successfully!</div>';
+            fetchAttackDirectionState();
             
             // Conectar WebSocket
             connectWebSocket();
@@ -292,6 +304,7 @@ async function uploadVideo() {
         if (data.success) {
             currentSessionId = data.session_id;
             statusDiv.innerHTML = '<div class="alert alert-success"><i class="fas fa-check-circle me-2"></i>Video subido correctamente</div>';
+            fetchAttackDirectionState();
             
             // Conectar WebSocket
             connectWebSocket();
@@ -348,6 +361,9 @@ function handleWebSocketMessage(data) {
         updateBatchComplete(data);
     } else if (data.type === 'alert') {
         handleAlert(data.alert);
+    } else if (data.type === 'attack_direction') {
+        attackDirectionState = data.state || null;
+        renderAttackDirectionState();
     } else if (data.type === 'completed') {
         stopHeatmapUpdates();
         showResults(data.stats);
@@ -456,6 +472,10 @@ function updateBatchComplete(data) {
     // Actualizar estadísticas en tiempo real
     if (data.stats) {
         console.log('Stats recibidas:', data.stats);
+        if (data.stats.attack_direction) {
+            attackDirectionState = data.stats.attack_direction;
+            renderAttackDirectionState();
+        }
         updateLiveStats(data.stats);
         updateLiveCharts(data.stats);
         
@@ -466,6 +486,94 @@ function updateBatchComplete(data) {
         } else {
             console.warn('No spatial stats en este batch');
         }
+
+    }
+}
+
+async function fetchAttackDirectionState() {
+    if (!currentSessionId) return;
+    try {
+        const res = await fetch(`/api/attack-direction?session_id=${encodeURIComponent(currentSessionId)}`);
+        const data = await res.json();
+        if (data.success) {
+            attackDirectionState = data.state || null;
+            renderAttackDirectionState();
+        }
+    } catch (err) {
+        console.warn('No se pudo obtener attack direction:', err);
+    }
+}
+
+function renderAttackDirectionState() {
+    const badge = document.getElementById('attack-direction-badge');
+    const text = document.getElementById('attack-direction-state-text');
+    const modeSel = document.getElementById('attack-direction-mode');
+    const periodSel = document.getElementById('attack-direction-period');
+    const team0Sel = document.getElementById('attack-direction-team0');
+    if (!badge || !text || !modeSel || !periodSel || !team0Sel) return;
+
+    const s = attackDirectionState || {
+        mode: 'manual',
+        period: 1,
+        team_0_attacks_to: null,
+        team_1_attacks_to: null,
+        confidence: 0,
+        source: 'manual_override'
+    };
+
+    badge.className = 'badge bg-primary';
+    badge.textContent = 'mode: manual';
+    text.textContent = `mode=${s.mode} | period=${s.period} | team_0_attacks_to=${s.team_0_attacks_to} | team_1_attacks_to=${s.team_1_attacks_to} | confidence=${(s.confidence || 0).toFixed(2)} | source=${s.source}`;
+
+    modeSel.value = 'manual';
+    periodSel.value = String(s.period || 1);
+    if (s.team_0_attacks_to) {
+        team0Sel.value = s.team_0_attacks_to;
+    }
+}
+
+async function applyAttackDirectionControl() {
+    if (!currentSessionId) return;
+    const modeSel = document.getElementById('attack-direction-mode');
+    const periodSel = document.getElementById('attack-direction-period');
+    const team0Sel = document.getElementById('attack-direction-team0');
+    if (!modeSel || !periodSel || !team0Sel) return;
+
+    try {
+        const response = await fetch('/api/attack-direction/manual', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                session_id: currentSessionId,
+                period: Number(periodSel.value || 1),
+                team_0_attacks_to: team0Sel.value
+            })
+        });
+        const data = await response.json();
+        if (data.success) {
+            attackDirectionState = data.state || null;
+            renderAttackDirectionState();
+        }
+    } catch (err) {
+        console.error('Error actualizando orientación de ataque:', err);
+    }
+}
+
+async function clearAttackDirectionManualOverride() {
+    if (!currentSessionId) return;
+    try {
+        const response = await fetch('/api/attack-direction/clear', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: currentSessionId })
+        });
+        const data = await response.json();
+        if (data.success) {
+            attackDirectionState = data.state || null;
+            renderAttackDirectionState();
+        }
+    } catch (err) {
+        console.error('Error limpiando override manual:', err);
     }
 }
 
@@ -1027,6 +1135,8 @@ function getTeamZonePercentagesFromSpatial(teamId, spatial) {
 
     const zp = spatial.zone_percentages || {};
     const pbz = spatial.possession_by_zone || {};
+    const sumArray = (arr) => arr.reduce((acc, val) => acc + (Number(val) || 0), 0);
+    const hasSignal = (arr) => sumArray(arr) > 1e-6;
 
     const candidates = [
         zp[teamId],
@@ -1041,12 +1151,23 @@ function getTeamZonePercentagesFromSpatial(teamId, spatial) {
 
     for (const candidate of candidates) {
         if (Array.isArray(candidate)) {
+            const numeric = candidate.map((v) => Number(v) || 0);
             // Si viene desde possession_by_zone (frames), normalizar a porcentajes
-            const sum = candidate.reduce((acc, val) => acc + (Number(val) || 0), 0);
-            if (sum > 0 && (spatial.zone_percentages == null || candidate === pbz[teamId] || candidate === pbz[String(teamId)] || candidate === pbz[`team_${teamId}`] || candidate === pbz[`team${teamId}`])) {
-                return candidate.map((v) => ((Number(v) || 0) / sum) * 100);
+            const isPossessionFramesCandidate = (
+                candidate === pbz[teamId] ||
+                candidate === pbz[String(teamId)] ||
+                candidate === pbz[`team_${teamId}`] ||
+                candidate === pbz[`team${teamId}`]
+            );
+            const sum = sumArray(numeric);
+            if (sum > 0 && isPossessionFramesCandidate) {
+                return numeric.map((v) => (v / sum) * 100);
             }
-            return candidate.map((v) => Number(v) || 0);
+            // Si este candidato no tiene señal (todo 0), seguimos buscando fallback.
+            if (!hasSignal(numeric)) {
+                continue;
+            }
+            return numeric;
         }
     }
     return null;
@@ -1134,7 +1255,7 @@ function updateTopZones(teamId, zonePercentages) {
     // Crear array de zonas con índice y porcentaje
     const zones = zonePercentages.map((pct, idx) => ({
         index: idx,
-        name: getNeutralZoneLabelByIndex(idx),
+        name: getTeamRelativeZoneLabelByIndex(idx, teamId, attackDirectionState),
         percent: Number(pct) || 0
     }));
     
@@ -1154,33 +1275,44 @@ function updateTopZones(teamId, zonePercentages) {
     }
 }
 
-function getNeutralZoneLabelByIndex(zoneIndex) {
-    // Mapeo para partición 3x3 (x por lado del campo, y por franja vertical).
-    const xSide = ['Lado izquierdo', 'Centro del campo', 'Lado derecho'];
-    const yBand = ['Franja baja', 'Franja media', 'Franja superior'];
+function getTeamRelativeZoneLabelByIndex(zoneIndex, teamId, directionState) {
+    // Partición thirds_lanes 3x3: indices [0..2]=tercio izq absoluto, [3..5]=centro, [6..8]=der.
+    const yBand = ['Inferior', 'Medio', 'Superior'];
+    if (!(zoneIndex >= 0 && zoneIndex < 9)) return `Zona ${zoneIndex}`;
 
-    if (zoneIndex >= 0 && zoneIndex < 9) {
-        const side = xSide[Math.floor(zoneIndex / 3)] || 'Centro del campo';
-        const band = yBand[zoneIndex % 3] || 'Franja media';
-        return `${side} - ${band}`;
+    const col = Math.floor(zoneIndex / 3); // 0,1,2
+    const band = yBand[zoneIndex % 3] || 'Medio';
+
+    const attacksTo = teamId === 0
+        ? directionState?.team_0_attacks_to
+        : directionState?.team_1_attacks_to;
+
+    // Si ataca a derecha: [0,1,2] => Defensa/Centro/Ataque
+    // Si ataca a izquierda: invertido [0,1,2] => Ataque/Centro/Defensa
+    let thirdsRight = ['Defensa', 'Centro', 'Ataque'];
+    if (attacksTo === 'left') {
+        thirdsRight = ['Ataque', 'Centro', 'Defensa'];
+    } else if (attacksTo == null) {
+        // Fallback conservador (mismo convenio que ataca a derecha)
+        thirdsRight = ['Defensa', 'Centro', 'Ataque'];
     }
-
-    return `Zona ${zoneIndex}`;
+    const thirdName = thirdsRight[col] || 'Centro';
+    return `${thirdName} - ${band}`;
 }
 
 function formatZoneName(zoneName) {
     if (!zoneName) return 'Zona desconocida';
 
     const zoneLabelMap = {
-        def_left: 'Lado izquierdo - franja baja',
-        def_center: 'Lado izquierdo - franja media',
-        def_right: 'Lado izquierdo - franja superior',
-        mid_left: 'Centro del campo - franja baja',
-        mid_center: 'Centro del campo - franja media',
-        mid_right: 'Centro del campo - franja superior',
-        off_left: 'Lado derecho - franja baja',
-        off_center: 'Lado derecho - franja media',
-        off_right: 'Lado derecho - franja superior'
+        def_left: 'Defensa - Inferior',
+        def_center: 'Defensa - Medio',
+        def_right: 'Defensa - Superior',
+        mid_left: 'Centro - Inferior',
+        mid_center: 'Centro - Medio',
+        mid_right: 'Centro - Superior',
+        off_left: 'Ataque - Inferior',
+        off_center: 'Ataque - Medio',
+        off_right: 'Ataque - Superior'
     };
 
     return zoneLabelMap[zoneName] || zoneName.replaceAll('_', ' ');
@@ -1200,6 +1332,100 @@ function normalizeZoneNamesInText(text) {
         output = output.replace(regex, label);
     }
     return output;
+}
+
+function buildTwoLinePredictionMessage(alert) {
+    const ep = alert?.data?.event_prediction || {};
+    const eventTypeLabelMap = {
+        dangerous_attack: 'ataque peligroso',
+        shot: 'tiro',
+        corner: 'córner',
+        dangerous_transition: 'transición peligrosa',
+        final_third_entry: 'entrada al último tercio',
+        dangerous_turnover: 'pérdida peligrosa'
+    };
+
+    const teamLabel = (ep.team_id !== undefined && ep.team_id !== null) ? `Equipo ${ep.team_id}` : 'Equipo';
+    const eventLabel = eventTypeLabelMap[ep.event_type] || ep.event_type || 'evento';
+    const pct = ((Number(ep.probability) || 0) * 100).toFixed(0);
+    const horizon = ep.time_horizon_sec ?? '-';
+
+    const line1 = `Posible ${eventLabel} de ${teamLabel} (${pct}% en ~${horizon}s).`;
+
+    const evidence = Array.isArray(ep.evidence) ? ep.evidence : [];
+    const metrics = (ep.metrics && typeof ep.metrics === 'object') ? ep.metrics : {};
+    const evidenceLabelMap = {
+        defensive_resistance: 'la defensa rival está exigida',
+        field_tilt: 'el juego está inclinado hacia campo rival',
+        progression_rate: 'el equipo progresa con continuidad hacia portería',
+        expected_threat_proxy: 'las acciones ofensivas tienen amenaza alta',
+        box_entry_risk: 'hay llegadas frecuentes al área',
+        final_third_presence: 'hay mucha presencia en último tercio',
+        attacking_momentum: 'el ataque mantiene inercia positiva',
+        wide_overload: 'se carga el ataque por bandas',
+        offensive_pressure: 'la presión ofensiva es alta',
+        shot_pressure_signal: 'se acumulan señales de finalización',
+        transition_danger: 'hay riesgo de transición rápida',
+        turnover_risk: 'hay riesgo de pérdida en zona sensible',
+        final_third_entries_signal: 'se repiten entradas al último tercio',
+        corner_likelihood_signal: 'el patrón de juego favorece córner'
+    };
+
+    const toNaturalEvidence = (raw) => {
+        const txt = String(raw || '').replace('contexto_zonal:', '').trim();
+        if (!txt) return '';
+        const metricMatch = txt.match(/^([a-z_]+)=([0-9.]+)\*?([\-0-9.]*)$/i) || txt.match(/^([a-z_]+)=([0-9.]+)$/i);
+        if (metricMatch) {
+            const key = metricMatch[1];
+            return evidenceLabelMap[key] || 'hay señales ofensivas favorables';
+        }
+        if (txt.startsWith('score_raw=')) return '';
+        return txt;
+    };
+
+    const metricNum = (key) => {
+        const v = Number(metrics[key]);
+        return Number.isFinite(v) ? v : null;
+    };
+
+    const asPercentText = (value01) => `${Math.round(Math.max(0, Math.min(1, value01)) * 100)}%`;
+
+    // Dato cuantificado en lenguaje natural (1 pista principal).
+    const naturalQuantHints = [];
+    const finalThirdPresence = metricNum('final_third_presence');
+    if (finalThirdPresence !== null) {
+        naturalQuantHints.push(`en los últimos segundos, ${asPercentText(finalThirdPresence)} de la posesión fue en zonas de ataque`);
+    }
+    const wideOverload = metricNum('wide_overload');
+    if (wideOverload !== null) {
+        naturalQuantHints.push(`aprox. ${asPercentText(wideOverload)} del juego ofensivo se cargó por bandas`);
+    }
+    const boxEntryRisk = metricNum('box_entry_risk');
+    if (boxEntryRisk !== null) {
+        naturalQuantHints.push(`la frecuencia de llegadas al área está en torno al ${asPercentText(boxEntryRisk)}`);
+    }
+    const transitionDanger = metricNum('transition_danger');
+    if (transitionDanger !== null) {
+        naturalQuantHints.push(`el riesgo de transición rápida está alrededor del ${asPercentText(transitionDanger)}`);
+    }
+
+    const keyEvidence = evidence
+        .filter((e) => typeof e === 'string')
+        .map((e) => toNaturalEvidence(e))
+        .filter((e) => e.length > 0)
+        .slice(0, 2);
+
+    let line2 = 'Clave: presión ofensiva y contexto zonal.';
+    const quantHint = naturalQuantHints[0] || '';
+    if (keyEvidence.length > 0) {
+        line2 = quantHint
+            ? `Clave: ${keyEvidence.join('; ')}; ${quantHint}.`
+            : `Clave: ${keyEvidence.join('; ')}.`;
+    } else if (quantHint) {
+        line2 = `Clave: ${quantHint}.`;
+    }
+
+    return `${line1}\n${line2}`;
 }
 
 // Función para mostrar el resumen de heatmaps
@@ -1292,12 +1518,27 @@ function addAlertToChatbot(alert) {
     }
 
     let predictionHint = '';
-    if (predicted && typeof predicted === 'object') {
+    if (alert.type === 'prediction' && alert.data?.event_prediction) {
+        const ep = alert.data.event_prediction;
+        const eventTypeLabelMap = {
+            dangerous_attack: 'ataque peligroso',
+            shot: 'tiro',
+            corner: 'córner',
+            dangerous_transition: 'transición peligrosa',
+            final_third_entry: 'entrada a último tercio',
+            dangerous_turnover: 'pérdida peligrosa'
+        };
+        const eventLabel = eventTypeLabelMap[ep.event_type] || ep.event_type || 'evento';
+        const eventPct = ((Number(ep.probability) || 0) * 100).toFixed(1);
+        predictionHint = `\nProbabilidad principal: ${eventLabel} ${eventPct}% en ${ep.time_horizon_sec ?? '-'}s.`;
+    } else if (predicted && typeof predicted === 'object') {
         predictionHint = `\nProbabilidades: tiro ${predicted.shot ?? 0}%, gol ${predicted.goal ?? 0}%, córner ${predicted.corner ?? 0}%, falta peligrosa ${predicted.foul_in_danger_zone ?? 0}%.`;
     }
 
     const normalizedAlertMessage = normalizeZoneNamesInText(alert.message || '');
-    const enrichedMessage = `${normalizedAlertMessage}${predictionHint}${contextualHint}`;
+    const enrichedMessage = (alert.type === 'prediction' && alert.data?.event_prediction)
+        ? buildTwoLinePredictionMessage(alert)
+        : `${normalizedAlertMessage}${predictionHint}${contextualHint}`;
     const relevanceBadge = (typeof relevanceScore === 'number')
         ? `<span class="badge bg-dark-subtle text-dark ms-2">Relevancia ${(relevanceScore * 100).toFixed(0)}%</span>`
         : '';

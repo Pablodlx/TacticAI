@@ -43,6 +43,7 @@ REGLAS ESTRICTAS:
 - NO conviertas hipótesis en hechos: habla de posibilidad, riesgo o señal, no de que el evento ya ocurrió.
 - Usa tono prudente en español (península): breve, claro, profesional.
 - Distingue observación factual del estado actual vs. evento probable en el horizonte temporal dado (time_horizon_sec).
+- Si mencionas lateralidad, aclara si es en contexto relativo del equipo (ej.: "banda ofensiva derecha", "tercio defensivo").
 - Si falta información en los datos, no la supongas.
 - Devuelve EXCLUSIVAMENTE un objeto JSON válido que cumpla el esquema pedido en el mensaje de usuario, sin markdown ni texto adicional.
 """
@@ -107,8 +108,11 @@ def build_anthropic_messages(
 def format_prediction_alert_fallback(prediction: EventPrediction) -> str:
     pct = round(prediction.probability * 100.0)
     team = prediction.team_id if prediction.team_id is not None else "?"
+    title = (prediction.title or prediction.event_type or "evento").strip().lower()
+    if title.startswith("posible "):
+        title = title[len("posible ") :]
     return (
-        f"Señal de posible {prediction.title.lower()} del equipo {team} "
+        f"Señal de posible {title} del equipo {team} "
         f"(~{pct}% en los próximos {prediction.time_horizon_sec}s). "
         f"Evidencia: {', '.join(prediction.evidence[:3])}."
     )

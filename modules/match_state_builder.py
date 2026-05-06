@@ -8,10 +8,12 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from schemas.predictions import (
+    AttackDirectionState,
     BallPosition,
     MatchState,
     RecentEvent,
     SpatialMetrics,
+    TeamRoleContext,
     TemporalMetrics,
 )
 
@@ -132,6 +134,7 @@ def build_prediction_match_state(
     ball_field_xy_m: Optional[Tuple[float, float]] = None,
     calibration_valid: bool = False,
     current_period: Optional[int] = None,
+    attack_direction_state: Optional[Dict[str, Any]] = None,
 ) -> MatchState:
     """
     Args:
@@ -205,6 +208,21 @@ def build_prediction_match_state(
     if current_period is None:
         logger.debug("match_state_builder: current_period unknown — usando None (TODO sport clock)")
 
+    ads = AttackDirectionState(**(attack_direction_state or {}))
+    team_context: Dict[str, TeamRoleContext] = {}
+    for tid in (0, 1):
+        att = ads.team_0_attacks_to if tid == 0 else ads.team_1_attacks_to
+        if att is None:
+            def_side = None
+        else:
+            def_side = "left" if att == "right" else "right"
+        team_context[str(tid)] = TeamRoleContext(
+            attacking_side=att,
+            defending_side=def_side,
+            is_attacking=(current_team == tid),
+            is_defending=(current_team is not None and current_team != tid),
+        )
+
     return MatchState(
         timestamp_sec=ts,
         frame_id=frame_id,
@@ -225,4 +243,7 @@ def build_prediction_match_state(
         zone_percentages_by_team=zone_pct_by_team,
         zone_names=list(zone_names) if zone_names else [],
         partition_type=str(spatial_stats.get("partition_type") or spatial_stats.get("zone_partition_type") or "thirds_lanes"),
+        attack_direction=ads,
+        orientation_mode=ads.mode,
+        team_context=team_context,
     )

@@ -9,6 +9,7 @@ import math
 from typing import Dict, List, Tuple
 
 from schemas.predictions import MatchState
+from modules.field_orientation import orient_x_for_team, get_team_relative_zone
 
 # Campo en metros (coherente con field_heatmap_system)
 FIELD_LENGTH_M = 105.0
@@ -41,6 +42,9 @@ def estimate_expected_threat_proxy(state: MatchState, team_id: int) -> float:
     """
     zm = state.spatial_metrics
     fp = state.field_progress
+    if state.ball_position.x_m is not None:
+        x_att = orient_x_for_team(state.ball_position.x_m, team_id, state.attack_direction.model_dump())
+        fp = _clamp01(x_att / FIELD_LENGTH_M)
     base = 0.45 * zm.offensive_third_share + 0.35 * fp + 0.20 * zm.penalty_area_pressure_proxy
     if state.team_in_possession == team_id:
         base += 0.05
@@ -63,9 +67,12 @@ def estimate_field_tilt(state: MatchState, team_id: int) -> float:
     return _clamp01(0.5 + (d - o) * 0.5)
 
 
-def estimate_progression_rate(state: MatchState) -> float:
+def estimate_progression_rate(state: MatchState, team_id: int = 0) -> float:
     """Tasa de progresión hacia el marco rival (basada en field_progress y eventos)."""
     base = state.field_progress
+    if state.ball_position.x_m is not None:
+        x_att = orient_x_for_team(state.ball_position.x_m, team_id, state.attack_direction.model_dump())
+        base = _clamp01(x_att / FIELD_LENGTH_M)
     pm = state.temporal_metrics
     pass_boost = min(0.25, pm.pass_chain_recent * 0.04)
     return _clamp01(base * 0.75 + pass_boost + 0.1 * min(1.0, pm.possession_segment_frames / 120.0))
@@ -80,35 +87,51 @@ def estimate_final_third_entries(state: MatchState, team_id: int) -> float:
     return _clamp01(state.spatial_metrics.offensive_third_share)
 
 
-def estimate_box_entry_risk(state: MatchState) -> float:
+def estimate_box_entry_risk(state: MatchState, team_id: int = 0) -> float:
+    rel_bonus = 0.0
+    if state.ball_position.x_m is not None and state.ball_position.y_m is not None:
+        rel_zone = get_team_relative_zone(
+            state.ball_position.x_m, state.ball_position.y_m, team_id, state.attack_direction.model_dump()
+        )
+        if rel_zone in {"box_zone", "pre_box_zone", "byline_zone"}:
+            rel_bonus = 0.15
     return _clamp01(
         0.5 * state.spatial_metrics.penalty_area_pressure_proxy
         + 0.3 * state.field_progress
         + 0.2 * state.spatial_metrics.offensive_third_share
+        + rel_bonus
     )
 
 
-def estimate_shot_pressure_signal(state: MatchState) -> float:
+def estimate_shot_pressure_signal(state: MatchState, team_id: int = 0) -> float:
     m = state.spatial_metrics
     t = state.temporal_metrics
     return _clamp01(
         0.35 * m.penalty_area_pressure_proxy
         + 0.30 * m.offensive_third_share
         + 0.20 * min(1.0, t.pass_chain_recent / 8.0)
-        + 0.15 * estimate_progression_rate(state)
+        + 0.15 * estimate_progression_rate(state, team_id)
     )
 
 
-def estimate_corner_likelihood_signal(state: MatchState) -> float:
+def estimate_corner_likelihood_signal(state: MatchState, team_id: int = 0) -> float:
     """
     Córner: presión ancha + profundidad sin tiro aún; banda y línea de fondo.
     """
     m = state.spatial_metrics
     wide = m.wide_left_share + m.wide_right_share
+    byline_boost = 0.0
+    if state.ball_position.x_m is not None and state.ball_position.y_m is not None:
+        rz = get_team_relative_zone(
+            state.ball_position.x_m, state.ball_position.y_m, team_id, state.attack_direction.model_dump()
+        )
+        if rz == "byline_zone":
+            byline_boost = 0.2
     return _clamp01(
         0.40 * min(1.0, wide * 1.2)
         + 0.35 * m.offensive_third_share
         + 0.25 * estimate_wide_overload(state)
+        + byline_boost
     )
 
 
@@ -167,11 +190,11 @@ def compute_all_metrics(state: MatchState, team_id: int) -> Dict[str, float]:
     return {
         "expected_threat_proxy": estimate_expected_threat_proxy(state, team_id),
         "field_tilt": estimate_field_tilt(state, team_id),
-        "progression_rate": estimate_progression_rate(state),
+        "progression_rate": estimate_progression_rate(state, team_id),
         "final_third_entries_signal": estimate_final_third_entries(state, team_id),
-        "box_entry_risk": estimate_box_entry_risk(state),
-        "shot_pressure_signal": estimate_shot_pressure_signal(state),
-        "corner_likelihood_signal": estimate_corner_likelihood_signal(state),
+        "box_entry_risk": estimate_box_entry_risk(state, team_id),
+        "shot_pressure_signal": estimate_shot_pressure_signal(state, team_id),
+        "corner_likelihood_signal": estimate_corner_likelihood_signal(state, team_id),
         "turnover_risk": estimate_turnover_risk(state, team_id),
         "transition_danger": estimate_transition_danger(state, team_id),
         "wide_overload": estimate_wide_overload(state),

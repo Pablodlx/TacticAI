@@ -9,6 +9,7 @@ Soporta múltiples fuentes de video y recuperación ante fallos.
 import time
 from typing import Optional, Callable
 from dataclasses import dataclass
+from typing import Any
 
 from modules.video_sources import (
     open_source, SourceType, read_frame_batches, calculate_batch_size
@@ -68,6 +69,7 @@ class AnalysisConfig:
     
     # Límites (para testing)
     max_batches: Optional[int] = None
+    attack_direction_manager: Optional[Any] = None
 
 
 def run_match_analysis(
@@ -168,7 +170,8 @@ def run_match_analysis(
                 zone_nx=config.zone_nx,
                 zone_ny=config.zone_ny,
                 enable_heatmaps=config.enable_heatmaps,
-                heatmap_resolution=config.heatmap_resolution
+                heatmap_resolution=config.heatmap_resolution,
+                attack_direction_manager=config.attack_direction_manager,
             )
             
             # 4. LOOP DE MICRO-BATCHING

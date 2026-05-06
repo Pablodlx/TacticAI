@@ -145,7 +145,8 @@ class BatchProcessor:
         enable_heatmaps: bool = True,
         heatmap_resolution: Tuple[int, int] = (50, 34),
         # Optimización: Optical Flow deshabilidado por defecto (toma 390ms/frame)
-        enable_optical_flow: bool = False
+        enable_optical_flow: bool = False,
+        attack_direction_manager: Optional[Any] = None,
     ):
         """
         Inicializa el procesador de batches.
@@ -208,6 +209,12 @@ class BatchProcessor:
 
         # Sistema de alertas tácticas
         self.alert_system: Optional[MatchAlertSystem] = None
+        self.attack_direction_manager = attack_direction_manager
+        # Acumulador robusto de presencia zonal por equipo (independiente de SpatialPossessionTracker)
+        self.zone_presence_counts = {
+            0: np.zeros(9, dtype=np.float32),
+            1: np.zeros(9, dtype=np.float32),
+        }
     
     def initialize_modules(self, match_state: MatchState):
         """
@@ -793,9 +800,15 @@ class BatchProcessor:
                         
                         # Acumular posiciones en píxeles por ID (no proyectar aún)
                         for obj in tracked_objects:
-                            if obj['class_name'] == 'player' and obj.get('team_id', -1) >= 0:
+                            if obj['class_name'] == 'player':
                                 track_id = obj['track_id']
-                                team_id = obj['team_id']
+                                raw_team_id = obj.get('team_id', -1)
+                                current_poss_team = self.possession_tracker.current_possession_team
+                                team_id = raw_team_id if raw_team_id in (0, 1) else (
+                                    current_poss_team if current_poss_team in (0, 1) else -1
+                                )
+                                if team_id not in (0, 1):
+                                    continue
                                 bbox = obj['bbox']
                                 center_x = (bbox[0] + bbox[2]) / 2
                                 center_y = (bbox[1] + bbox[3]) / 2
@@ -883,6 +896,20 @@ class BatchProcessor:
                                     field_pos = self.position_smoother.smooth(
                                         track_id, field_pos, confidence, is_detected=True
                                     )
+
+                                    # Acumular presencia zonal por equipo para top-zonas UI.
+                                    # Esto corrige sesgos del tracker espacial legacy y usa datos proyectados por jugador.
+                                    if team_id in (0, 1):
+                                        try:
+                                            x_m = float(field_pos[0])
+                                            y_m = float(field_pos[1])
+                                            if 0.0 <= x_m <= FIELD_LENGTH and 0.0 <= y_m <= FIELD_WIDTH:
+                                                col = min(2, max(0, int(x_m / (FIELD_LENGTH / 3.0))))
+                                                row = min(2, max(0, int(y_m / (FIELD_WIDTH / 3.0))))
+                                                zone_idx = col * 3 + row
+                                                self.zone_presence_counts[team_id][zone_idx] += 1.0
+                                        except Exception:
+                                            pass
 
                                     # Inicializar acumulador para este ID si no existe
                                     if track_id not in player_field_positions_accumulator:
@@ -1111,8 +1138,25 @@ class BatchProcessor:
                 'zone_partition_type': zone_stats.get('partition_type', 'unknown'),
                 'partition_type': zone_stats.get('partition_type', 'unknown'),
                 'num_zones': zone_stats.get('num_zones', 0),
-                'zone_names': zone_names
+                'zone_names': zone_names,
+                'zone_stats_source': 'spatial_possession_tracker'
             }
+
+            # Override robusto de top-zonas desde presencia acumulada por equipo (si hay señal).
+            team0_sum = float(self.zone_presence_counts[0].sum())
+            team1_sum = float(self.zone_presence_counts[1].sum())
+            if team0_sum > 0.0 or team1_sum > 0.0:
+                pz = {
+                    0: self.zone_presence_counts[0].astype(float).tolist(),
+                    1: self.zone_presence_counts[1].astype(float).tolist(),
+                }
+                zp = {
+                    0: ((self.zone_presence_counts[0] / team0_sum) * 100.0).tolist() if team0_sum > 0 else [0.0] * 9,
+                    1: ((self.zone_presence_counts[1] / team1_sum) * 100.0).tolist() if team1_sum > 0 else [0.0] * 9,
+                }
+                chunk_stats['spatial']['possession_by_zone'] = pz
+                chunk_stats['spatial']['zone_percentages'] = zp
+                chunk_stats['spatial']['zone_stats_source'] = 'projected_player_presence'
             
             # No incluir heatmaps en chunk_stats (son muy grandes)
             # Se exportarán al final del análisis
@@ -1151,11 +1195,27 @@ class BatchProcessor:
                     if recent_pass_events:
                         spatial_stats_for_alerts['recent_events'] = recent_pass_events
 
+                current_period = int((match_state.metadata or {}).get("current_period", 1))
+                attack_direction_state = None
+                if self.attack_direction_manager is not None:
+                    attack_direction_state = self.attack_direction_manager.update_auto(
+                        {
+                            "period": current_period,
+                            "frame_id": end_frame_idx,
+                            "team_in_possession": self.possession_tracker.current_possession_team,
+                            "ball_x_m": prediction_ball_field_xy[0] if prediction_ball_field_xy else None,
+                            "ball_y_m": prediction_ball_field_xy[1] if prediction_ball_field_xy else None,
+                        }
+                    )
+
                 prediction_context = {
                     "ball_field_xy_m": prediction_ball_field_xy,
                     "calibration_valid": prediction_cal_valid,
                     "possession_timeline": self.possession_tracker.get_possession_timeline(),
+                    "attack_direction_state": attack_direction_state,
                 }
+                if attack_direction_state is not None:
+                    chunk_stats["attack_direction"] = attack_direction_state
                 
                 # Generar alertas (frame_id es el argumento correcto)
                 alerts = self.alert_system.analyze_and_generate_alerts(
