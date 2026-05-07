@@ -12,9 +12,24 @@ export DATABASE_URL=${DATABASE_URL:-sqlite:///./runtime_data/jobs.db}
 
 mkdir -p runtime_data
 
+sqlite_path_from_url() {
+  local url="$1"
+  local prefix="sqlite:///"
+  if [[ "$url" == ${prefix}* ]]; then
+    echo "${url#${prefix}}"
+    return 0
+  fi
+  return 1
+}
+
 case "$CMD" in
   init-local)
     echo "Initializing local DB and applying migrations..."
+    if sqlite_path=$(sqlite_path_from_url "$DATABASE_URL"); then
+      mkdir -p "$(dirname "$sqlite_path")"
+      # Evita estado sucio en CI/local cuando existe una DB previa creada sin Alembic.
+      rm -f "$sqlite_path"
+    fi
     alembic upgrade head
     ;;
   migrate)

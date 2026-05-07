@@ -1,9 +1,11 @@
 import os
+import subprocess
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from app_service.api import deps
+from app_service.config import get_settings
 from app_service.main import create_app
 from app_service.providers.database.base import Job
 from app_service.services.jobs import JobService
@@ -15,10 +17,18 @@ def _setup_env(tmp_path: Path):
     os.environ["QUEUE_BACKEND"] = "sync"
     os.environ["LOCAL_STORAGE_PATH"] = str(tmp_path / "storage")
     os.environ["DATABASE_URL"] = f"sqlite:///{tmp_path}/jobs.db"
+    get_settings.cache_clear()
+
+
+def _migrate_test_db(tmp_path: Path):
+    env = os.environ.copy()
+    env["DATABASE_URL"] = f"sqlite:///{tmp_path}/jobs.db"
+    subprocess.run(["./scripts/db_manage.sh", "upgrade"], check=True, env=env)
 
 
 def test_post_health(tmp_path):
     _setup_env(tmp_path)
+    _migrate_test_db(tmp_path)
     app = create_app()
     client = TestClient(app)
     resp = client.post("/health")
@@ -28,6 +38,7 @@ def test_post_health(tmp_path):
 
 def test_jobs_sync_and_status_transitions(tmp_path, monkeypatch):
     _setup_env(tmp_path)
+    _migrate_test_db(tmp_path)
     app = create_app()
     client = TestClient(app)
 

@@ -31,7 +31,9 @@ jobs:
       - name: Init local DB with Alembic
         env:
           DATABASE_URL: sqlite:///./runtime_data/jobs.db
-        run: ./scripts/db_manage.sh init-local
+        run: |
+          rm -f runtime_data/jobs.db
+          ./scripts/db_manage.sh init-local
 
       - name: Run minimal integration tests
         env:
