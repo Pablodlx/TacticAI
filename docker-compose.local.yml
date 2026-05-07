@@ -1,0 +1,49 @@
+version: "3.9"
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env.local.example
+    volumes:
+      - ./:/app
+    depends_on:
+      - redis
+      - postgres
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command: ["python", "worker/main.py"]
+    env_file:
+      - .env.local.example
+    volumes:
+      - ./:/app
+    depends_on:
+      - redis
+      - postgres
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tacticeye
+      POSTGRES_PASSWORD: tacticeye
+      POSTGRES_DB: tacticeye
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
+

@@ -361,6 +361,9 @@ function handleWebSocketMessage(data) {
         updateBatchComplete(data);
     } else if (data.type === 'alert') {
         handleAlert(data.alert);
+    } else if (data.type === 'alerts') {
+        const alerts = Array.isArray(data.alerts) ? data.alerts : [];
+        alerts.forEach((alert) => handleAlert(alert));
     } else if (data.type === 'attack_direction') {
         attackDirectionState = data.state || null;
         renderAttackDirectionState();

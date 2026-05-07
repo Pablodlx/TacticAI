@@ -72,6 +72,7 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 # Estado global de análisis
 analysis_state: Dict[str, dict] = {}
 attack_direction_managers: Dict[str, "AttackDirectionManager"] = {}
+WS_ENABLE_PREVIEW_FRAMES = bool(int(os.getenv("WS_ENABLE_PREVIEW_FRAMES", "1")))
 
 # Filtro anti-outliers para renderizado de heatmaps
 HEATMAP_GOAL_LINE_MARGIN_M = 2.0
@@ -1034,11 +1035,10 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
                 # Enviar alertas si existen
                 alerts = chunk_stats.get('alerts', [])
                 if alerts:
-                    for alert in alerts:
-                        loop.run_until_complete(manager.send_update(session_id, {
-                            "type": "alert",
-                            "alert": alert
-                        }))
+                    loop.run_until_complete(manager.send_update(session_id, {
+                        "type": "alerts",
+                        "alerts": alerts
+                    }))
             except Exception as e:
                 print(f"Error en on_batch_complete: {e}")
                 import traceback
@@ -1066,7 +1066,7 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
             on_progress=on_progress,
             on_batch_complete=on_batch_complete,
             on_error=on_error,
-            on_frame_visualized=on_frame_visualized,
+            on_frame_visualized=on_frame_visualized if WS_ENABLE_PREVIEW_FRAMES else None,
             # Spatial tracking habilitado
             enable_spatial_tracking=True,
             zone_partition_type='thirds_lanes',

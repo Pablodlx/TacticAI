@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command: ["python", "worker/main.py"]
+    env_file:
+      - .env.cloud.example
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+
