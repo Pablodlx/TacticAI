@@ -67,21 +67,147 @@ Static paths already use `/static/...`; no HTML change required for that.
 
 ---
 
-## Analysis pipeline (where the code lives)
+## Analysis pipeline (end-to-end)
 
-Core orchestration:
+This section describes **what actually runs** when you analyze a match: data flow, checkpoints, and which `modules/` files participate.
 
-- `modules/match_analyzer.py` — micro-batching, `run_match_analysis`, `AnalysisConfig`
-- `modules/batch_processor.py` — detection, tracking, possession, space, NPZ/JSON export per batch as configured
-- `modules/video_sources.py` — uploaded file, YouTube, HLS, RTMP, Veo
-- `modules/match_state.py` — match state and persistence
-- `modules/spatial_possession_tracker.py`, `modules/field_*` — calibration and heatmaps
+### What the pipeline produces
 
-Prediction and alerts:
+From raw video the stack derives:
 
-- `schemas/predictions.py`, `modules/event_prediction_engine.py`, `modules/prediction_metrics.py`, `modules/prediction_dispatcher.py`, `config/predictions.yaml`
-- Optional narrative: `modules/prediction_anthropic.py` (Anthropic); without API keys, deterministic text
-- Live alerts: `modules/match_alert_system.py` wired from the processor
+- **Per-frame detections** — bounding boxes, class (`player`, `ball`, `referee`, `goalkeeper`), track IDs, team IDs for outfield players
+- **Possession and passes** — ball–player proximity in image space, smoothed possession team/player, **possession-change** and **pass** events when the tracker state changes
+- **Optional field / spatial layer** — field line keypoints, homography (with flip resolution), player feet projected to **105×68 m** pitch coordinates, **zone** labels, **heatmap** grids per team
+- **Alerts** — `MatchAlertSystem` combines zone/possession/passing heuristics with **event scores** from `EventPredictionEngine` (linear metrics + sigmoid, driven by `config/predictions.yaml`), optional Anthropic wording (`prediction_anthropic.py`), and dispatches via `prediction_dispatcher.py`
+
+All of that is implemented inside **`BatchProcessor.process_chunk()`** and orchestrated by **`run_match_analysis()`**.
+
+### Entry points (same engine, different shells)
+
+| Entry | File | Role |
+|-------|------|------|
+| Legacy web | `app.py` | Builds `AnalysisConfig`, wires WebSocket callbacks (`on_batch_complete`, `on_progress`, `on_frame_visualized`), optional `AttackDirectionManager` per session |
+| Core API | `modules/match_analyzer.py` | **`run_match_analysis(match_id, config, resume=True)`** — load video, micro-batches, persist state, invoke callbacks |
+| Jobs / worker | `app_service/providers/analysis/local.py` | **`LocalPipelineRunner`** — `AnalysisConfig` + `run_match_analysis(..., resume=False)` for uploaded files |
+
+There is no second vision stack for cloud: the worker calls the same `run_match_analysis` path.
+
+### High-level flow
+
+```mermaid
+flowchart TB
+  subgraph ingest [Ingestion]
+    VS[video_sources.open_source]
+    RB[read_frame_batches]
+  end
+  subgraph orch [Orchestration]
+    MA[match_analyzer.run_match_analysis]
+    MS[(MatchState + storage.save)]
+  end
+  subgraph chunk [Per batch]
+    BP[batch_processor.BatchProcessor.process_chunk]
+    YOLO[YOLO predict batch]
+    RT[ReIDTracker.update]
+    TC[TeamClassifierV2]
+    PT[PossessionTrackerV2]
+    SP[Spatial + keypoints + homography + heatmaps]
+    AL[MatchAlertSystem]
+  end
+  subgraph persist [Persistence]
+    SO[save_chunk_output JSON under output_dir]
+    HM[export_spatial_heatmaps NPZ optional]
+  end
+  VS --> RB --> MA
+  MA --> BP
+  BP --> YOLO --> RT --> TC --> PT
+  TC --> SP
+  PT --> AL
+  BP --> SO
+  MA --> MS
+  SP --> HM
+```
+
+### 1) Video ingestion (`modules/video_sources.py`)
+
+- **`SourceType`**: uploaded file, YouTube VOD/live, Veo, HLS, RTMP, webcam
+- **`open_source(type, path_or_url)`** — returns a source with metadata (fps, resolution, duration or live flag) and a **frame generator** (BGR `numpy` frames)
+- **`read_frame_batches()`** — groups frames into chunks sized from **`AnalysisConfig.batch_size_seconds`** (or fixed frame count)
+
+### 2) Orchestration loop (`modules/match_analyzer.py`)
+
+1. **State** — Create or **resume** `MatchState` via `config.storage` or **`get_default_storage()`** → `FileSystemStorage` under the directory **`match_states/`** (one `{match_id}.json` checkpoint per save)
+2. **Open video** — Attach fps/size to `MatchState.metadata`
+3. **BatchProcessor** — Constructed once per run; loads the YOLO weights from `config.model_path`
+4. **For each batch**  
+   - `processor.process_chunk(match_state, frames, start_frame_idx, fps, …)`  
+   - **`save_chunk_output()`** — writes per-batch JSON under **`config.output_dir`** (default **`outputs_streaming/{match_id}/`**: `detections_batch_*.json`, `positions_batch_*.json`, `events_batch_*.json`, `stats_batch_*.json`)  
+   - **`storage.save(match_id, match_state)`** — checkpoint for resume / summary APIs  
+   - Optional **`export_spatial_heatmaps`** to `{match_id}_heatmaps.npz` when spatial tracking is on  
+   - **`on_batch_complete` / `on_progress` / `on_frame_visualized`** — used by `app.py` to push WebSocket updates and annotated preview frames (`WS_ENABLE_PREVIEW_FRAMES`)
+5. **Finish** — `match_state.mark_completed()` and final heatmap export when enabled
+
+### 3) Inside each chunk (`modules/batch_processor.py`)
+
+Rough **per-frame** order inside `process_chunk` (after a batched YOLO `predict` on the whole chunk for GPU efficiency):
+
+1. **Parse YOLO boxes** per frame (classes 0–3: player, ball, referee, goalkeeper)
+2. **`ReIDTracker.update`** — stable track IDs across frames (see `modules/reid_tracker.py`)
+3. **`TeamClassifierV2.add_detection` / `get_team`** — unsupervised team split from crop appearance (KMeans / voting); referees and ball get team `-1`
+4. **Ball owner** — nearest **player** center within a pixel radius (~60 px) to ball center
+5. **`PossessionTrackerV2.update`** — rolling possession team/player and accumulated frame counts → drives **pass** and **possession_change** **events** appended to the chunk list
+6. **Spatial branch** (when `enable_spatial_tracking` is true — default in `BatchProcessor.__init__` is `True`):  
+   - Periodic **`FieldKeypointsYOLO`** keypoints (`modules/field_keypoints_yolo.py`)  
+   - **`FieldCalibratorKeypoints`** accumulates keypoints and estimates homography (`field_calibrator_keypoints.py`, `field_model_keypoints.py`)  
+   - **`estimate_homography_with_flip_resolution`**, **`project_points`**, triangulation fallbacks from **`field_heatmap_system.py`**  
+   - Optional **`OpticalFlowTracker`** (default **off** — expensive) and **`KalmanFilterPositionSmoother`** / **`TrajectoryValidator`** for projected feet positions  
+   - **`SpatialPossessionTracker.update`** — zone model (`field_model.py` / `ZoneModel`) and legacy spatial state alongside heatmap accumulator bins  
+   - Ball projected to field when calibration is valid — feeds **prediction context** (ball x,y in metres)
+7. **`AttackDirectionManager`** (if injected) — period / direction hints from `modules/attack_direction_manager.py` and `config/` YAML consumed by alerts
+8. **`MatchAlertSystem.analyze_and_generate_alerts`** — builds structured stats + **`prediction_context`**, runs prediction engine / dispatcher / optional LLM formatting; attaches **`alerts`** into `chunk_stats` for the UI
+
+The chunk returns **`ChunkOutput`** (detections map, player positions list, events, stats, timing) plus the updated **`MatchState`**.
+
+### 4) Prediction and schemas
+
+- **`schemas/predictions.py`** — Pydantic models used by the prediction layer (distinct from the dataclass **`MatchState`** in `modules/match_state.py`, which is the runtime analysis state)
+- **`modules/match_state_builder.py`** — adapts live stats into the structure **`EventPredictionEngine`** expects
+- **`modules/prediction_metrics.py`** — features and scores fed into **`modules/event_prediction_engine.py`**
+- **`modules/prediction_config.py`** + **`config/predictions.yaml`** — thresholds, event types, sigmoid scale
+- **`modules/prediction_dispatcher.py`** — rate-limits / deduplicates emissions to the chat layer
+- **`modules/prediction_anthropic.py`** — optional natural-language phrasing when API keys are set
+
+### 5) Legacy web wiring (`app.py`)
+
+- HTTP routes for upload, remote URL ingest, heatmap PNG/NPZ endpoints, attack-direction overrides
+- **WebSocket** `/ws/{session_id}` streams batch summaries, alerts, and optionally annotated frames
+- Uses **`FileSystemStorage`**, **`HeatmapAccumulator`**, and helpers aligned with **`field_heatmap_system`** for server-side heatmap APIs
+
+### Module catalog (`modules/`)
+
+| Module | Responsibility |
+|--------|----------------|
+| **`match_analyzer.py`** | `run_match_analysis`, `AnalysisConfig`, batch loop, resume, shortcuts (`analyze_local_file`, `analyze_youtube`, …) |
+| **`batch_processor.py`** | `BatchProcessor`, `ChunkOutput`, `save_chunk_output`, spatial + alert integration |
+| **`video_sources.py`** | Multi-source frame iterators and batching helpers |
+| **`match_state.py`** | `MatchState`, sub-states (tracker, classifier, possession), `FileSystemStorage` / `RedisStorage` |
+| **`reid_tracker.py`** | Re-identification tracking on top of detections |
+| **`team_classifier_v2.py`** | Primary team classifier (KMeans + voting on jersey features) |
+| **`possession_tracker_v2.py`** | Primary possession + pass statistics |
+| **`match_alert_system.py`** | Tactical alerts + prediction hook-in |
+| **`field_keypoints_yolo.py`** | Pitch keypoint detector used for homography |
+| **`field_calibrator_keypoints.py`** / **`field_model_keypoints.py`** | Keypoint-based calibration pipeline |
+| **`field_model.py`** | Field dimensions and zone partition helpers |
+| **`field_heatmap_system.py`** | Homography resolution, projection helpers, `HeatmapAccumulator` |
+| **`spatial_possession_tracker.py`** | Zone / spatial possession accumulation |
+| **`optical_flow_tracker.py`** / **`position_smoother.py`** | Optional motion / smoothing path (flow disabled by default) |
+| **`attack_direction_manager.py`** | Attack direction / period logic shared with UI |
+| **`event_prediction_engine.py`** | Score-based event predictions |
+| **`prediction_metrics.py`** / **`prediction_dispatcher.py`** / **`prediction_config.py`** | Metrics, emit policy, YAML-backed config |
+| **`match_state_builder.py`** | Bridge live state → prediction `MatchState` model |
+| **`prediction_anthropic.py`** | Optional LLM copy for alerts |
+| **`tactical_analyzer.py`** | Deeper tactical strings when integrated |
+| **`team_classifier.py`**, **`team_classifier_v2_backup.py`**, **`possession_tracker.py`** | Older or backup variants — not the main web path |
+| **`field_calibration.py`**, **`field_line_detector.py`**, **`field_orientation.py`** | Alternate / supporting field geometry utilities |
 
 ---
 
