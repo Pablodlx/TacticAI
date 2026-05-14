@@ -1,6 +1,6 @@
 substitutions:
   _REGION: europe-west1
-  _REPO: tacticeye2
+  _REPO: tacticeye
   _SERVICE: tacticeye2-web
 
 steps:

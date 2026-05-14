@@ -60,6 +60,9 @@ outputs_demo/
 heatmap_images/
 results/
 exports/
+match_states/
+outputs_streaming/
+TFGs/
 
 # Large files
 *.mp4

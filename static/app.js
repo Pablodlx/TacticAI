@@ -15,6 +15,27 @@ let chatbotOpen = false;
 let unreadAlerts = 0;
 let alertHistory = [];
 let attackDirectionState = null;
+let jobsPollingInterval = null;
+
+function getApiMode() {
+    const host = (window.location.hostname || '').toLowerCase();
+    if (host.includes('localhost') || host.includes('127.0.0.1')) return 'legacy';
+    if (host.includes('run.app')) return 'jobs';
+    return 'legacy';
+}
+
+async function safeFetchJson(response) {
+    const raw = await response.text();
+    const trimmed = (raw || '').trim();
+    if (trimmed.startsWith('<')) {
+        throw new Error(`Respuesta no JSON (${response.status}). El backend devolvió HTML.`);
+    }
+    try {
+        return JSON.parse(trimmed || '{}');
+    } catch (err) {
+        throw new Error(`No se pudo parsear JSON (${response.status}): ${err.message}`);
+    }
+}
 
 // Función para reiniciar la interfaz
 function resetInterface() {
@@ -22,6 +43,10 @@ function resetInterface() {
     if (websocket) {
         websocket.close();
         websocket = null;
+    }
+    if (jobsPollingInterval) {
+        clearInterval(jobsPollingInterval);
+        jobsPollingInterval = null;
     }
     
     // Resetear session ID
@@ -231,6 +256,30 @@ async function analyzeFromUrl() {
     statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin me-2"></i>Connecting to stream...</div>';
     
     try {
+        const apiMode = getApiMode();
+        if (apiMode === 'jobs') {
+            const response = await fetch('/jobs', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    input_uri: url
+                })
+            });
+            const data = await safeFetchJson(response);
+            currentSessionId = data.id || data.job_id || null;
+            if (!currentSessionId) {
+                throw new Error('No se recibió job_id en la respuesta /jobs');
+            }
+            statusDiv.innerHTML = '<div class="alert alert-success"><i class="fas fa-check-circle me-2"></i>Job enviado correctamente</div>';
+            document.getElementById('upload-section').style.display = 'none';
+            document.getElementById('progress-section').style.display = 'block';
+            initializeChatbot();
+            startJobsPolling(currentSessionId);
+            return;
+        }
+
         console.log('Sending request to /api/analyze/url');
         const response = await fetch('/api/analyze/url', {
             method: 'POST',
@@ -243,7 +292,7 @@ async function analyzeFromUrl() {
             })
         });
         
-        const data = await response.json();
+        const data = await safeFetchJson(response);
         console.log('Response:', data);
         
         if (data.success) {
@@ -289,6 +338,12 @@ async function uploadVideo() {
     statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin me-2"></i>Subiendo video...</div>';
     
     try {
+        if (getApiMode() === 'jobs') {
+            statusDiv.innerHTML = '<div class="alert alert-warning"><i class="fas fa-info-circle me-2"></i>La subida directa aún no está conectada en la versión cloud. Usa una URL/URI de entrada.</div>';
+            uploadBtn.disabled = false;
+            return;
+        }
+
         const formData = new FormData();
         formData.append('file', file);
         
@@ -298,7 +353,7 @@ async function uploadVideo() {
             body: formData
         });
         
-        const data = await response.json();
+        const data = await safeFetchJson(response);
         console.log('Upload response:', data);
         
         if (data.success) {
@@ -320,6 +375,59 @@ async function uploadVideo() {
         statusDiv.innerHTML = `<div class="alert alert-danger"><i class="fas fa-exclamation-circle me-2"></i>Error: ${error.message}</div>`;
         uploadBtn.disabled = false;
     }
+}
+
+function startJobsPolling(jobId) {
+    if (jobsPollingInterval) {
+        clearInterval(jobsPollingInterval);
+    }
+
+    const progressText = document.getElementById('progress-text');
+    const progressBarFill = document.getElementById('progressBarFill');
+    const progressPercent = document.getElementById('progressPercent');
+
+    const poll = async () => {
+        try {
+            const response = await fetch(`/jobs/${jobId}`);
+            const data = await safeFetchJson(response);
+            const status = (data.status || '').toLowerCase();
+
+            if (status === 'pending') {
+                if (progressText) progressText.textContent = 'Pendiente de ejecución...';
+                if (progressBarFill) progressBarFill.style.width = '10%';
+                if (progressPercent) progressPercent.textContent = '10%';
+                return;
+            }
+
+            if (status === 'running') {
+                if (progressText) progressText.textContent = 'Procesando job...';
+                if (progressBarFill) progressBarFill.style.width = '60%';
+                if (progressPercent) progressPercent.textContent = '60%';
+                return;
+            }
+
+            if (status === 'completed' || status === 'finished') {
+                clearInterval(jobsPollingInterval);
+                jobsPollingInterval = null;
+                if (progressBarFill) progressBarFill.style.width = '100%';
+                if (progressPercent) progressPercent.textContent = '100%';
+                if (progressText) progressText.textContent = 'Completado';
+                showResults({ total_seconds: 0, total_frames: 0, possession_percent: [0, 0], possession_seconds: [0, 0], passes: [0, 0], timeline: [] });
+                return;
+            }
+
+            if (status === 'failed') {
+                clearInterval(jobsPollingInterval);
+                jobsPollingInterval = null;
+                showError(data.error_message || 'El job falló');
+            }
+        } catch (err) {
+            console.error('Error consultando estado de job:', err);
+        }
+    };
+
+    poll();
+    jobsPollingInterval = setInterval(poll, 2500);
 }
 
 // Conectar WebSocket

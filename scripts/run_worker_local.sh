@@ -7,5 +7,5 @@ export QUEUE_BACKEND=${QUEUE_BACKEND:-redis}
 export DATABASE_URL=${DATABASE_URL:-sqlite:///./runtime_data/jobs.db}
 export LOCAL_STORAGE_PATH=${LOCAL_STORAGE_PATH:-./runtime_data}
 
-python worker/main.py
+python -m worker.main
 

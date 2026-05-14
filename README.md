@@ -1,281 +1,240 @@
-# TacticEYE2 - Football Match Analysis System
+# TacticEYE2 — Tactical football video analysis
 
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
+Video match analysis with YOLO detection, ReID tracking, team classification, possession, passes, field calibration, heatmaps, and **algorithmic event prediction** with live alerts. The same codebase can run **locally** (classic WebSocket flow) or deploy as an **API + worker** stack aimed at Google Cloud.
+
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-red)](https://pytorch.org/)
-[![YOLO](https://img.shields.io/badge/YOLO-11-green)](https://github.com/ultralytics/ultralytics)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.104-009688)](https://fastapi.tiangolo.com/)
-[![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.110-009688)](https://fastapi.tiangolo.com/)
 
-TacticEYE2 is a real-time football video analytics system with a full web interface and core modules for player tracking, team classification, ball possession, and pass counting.
+---
 
-## What's New
+## Repository map (summary)
 
-- Complete FastAPI + WebSocket web app for live analysis
-- Real-time dashboard with interactive charts (Chart.js + Bootstrap)
-- Deterministic possession engine (`PossessionTrackerV2`)
-- Automatic pass counter by team
-- Improved team classification stability with `TeamClassifierV2`
-- **Event prediction (algorithmic)**: short-horizon risk signals with optional Claude narrative (see below)
+| Area | Contents |
+|------|----------|
+| **CV pipeline** | `modules/` — YOLO, ReID, teams, possession, space, heatmaps, homography, alerts |
+| **Legacy web** | `app.py` — upload, batched analysis, WebSocket, heatmap APIs |
+| **Dual API (jobs)** | `app_service/` — FastAPI jobs API, pluggable storage/queue/DB |
+| **Worker** | `worker/` — consumes queue and runs the same pipeline via `run_match_analysis` |
+| **UI** | `templates/index.html`, `static/app.js`, `static/style.css` |
+| **Infra** | Dockerfiles, compose, `cloudbuild.yaml`, `scripts/` |
+| **DB** | SQLAlchemy + **Alembic** (`alembic/`, `scripts/db_manage.sh`) |
+| **CI** | `.github/workflows/ci.yml` |
+| **Tests** | `tests/` |
+| **Docs** | `README_LOCAL.md`, `README_GCP.md`, `docs/TFG_TacticEYE2.md` |
 
-## Event prediction (real time)
+---
 
-The pipeline builds a structured `MatchState` ([`schemas/predictions.py`](schemas/predictions.py)), derives heuristic metrics ([`modules/prediction_metrics.py`](modules/prediction_metrics.py)), scores six event families with linear weights + sigmoid in [`modules/event_prediction_engine.py`](modules/event_prediction_engine.py), then deduplicates with [`modules/prediction_dispatcher.py`](modules/prediction_dispatcher.py). **Probabilities and severities always come from code**, not from the LLM.
+## Two ways to run the backend
 
-Anthropic ([`modules/prediction_anthropic.py`](modules/prediction_anthropic.py)) only formats JSON-validated Spanish phrases from the structured predictions; if the API is missing or parsing fails, deterministic fallback text is used.
+### 1) Legacy mode (recommended for the full local UI)
 
-**Configuration**: [`config/predictions.yaml`](config/predictions.yaml) (weights per event, thresholds, horizons, cooldowns). Loaded via [`modules/prediction_config.py`](modules/prediction_config.py).
-
-**Integration**: [`modules/batch_processor.py`](modules/batch_processor.py) passes `prediction_context` (ball field projection when calibrated, possession timeline) into [`modules/match_alert_system.py`](modules/match_alert_system.py). Alerts keep `type: "prediction"` for the chatbot; `data.predicted_events` remains compatible with the legacy UI percentages mapping.
-
-**Try it**:
+- **Entry:** `python app.py`
+- **API:** `/api/upload`, `/api/analyze/{session_id}`, `/api/analyze/url`, `/api/heatmap/...`, `/api/attack-direction`, WebSocket `/ws/{session_id}`
+- **UI:** templates and static files served from `app.py`
+- **Port:** default `8001` (or `PORT`); if busy, another port may be chosen automatically
 
 ```bash
-pip install pydantic
-PYTHONPATH=. pytest tests/test_prediction_engine.py tests/test_alerts.py -v
-PYTHONPATH=. python examples/prediction_standalone_demo.py
+pip install -r requirements.txt
+python app.py
+# Open http://localhost:8001 (or the port printed in the console)
 ```
 
-## Core Features
+### 2) Dual API + same UI (`app_service`)
 
-### 1) Re-Identification Tracking (ReID)
-- Player ReID using deep features (OSNet)
-- Persistent player IDs across the full match
-- Matching based on visual similarity + IoU
-- Occlusion and re-entry handling
+- **Entry:** `uvicorn app_service.main:app` (or `./scripts/run_local.sh`)
+- **Routes:** `/` (HTML), `/static/...`, `/health`, `/jobs`, `/jobs/upload`, `/jobs/{id}`, `/jobs/{id}/results`
+- **Jobs:** configurable queue (`sync`, `redis`, `pubsub`), storage (`local`, `gcs`), database via `DATABASE_URL`
+- **Schema:** normal path uses **Alembic** only (`./scripts/db_manage.sh`)
 
-### 2) Automatic Team Classification
-- `TeamClassifierV2`: K-means in LAB color space with green filtering
-- Automatic referee detection
-- Temporal voting for stable team assignments
+```bash
+export DATABASE_URL=sqlite:///./runtime_data/jobs.db
+./scripts/db_manage.sh init-local
+./scripts/run_local.sh
+# Default PORT=8000 in the script; override with export PORT=...
+```
 
-### 3) Ball Possession Detection (V2)
-- Deterministic possession assignment
-- 3-step process: detect ball -> nearest player -> distance validation
-- Configurable hysteresis (default: 5 frames)
-- Configurable possession distance (default: 60 px)
-- Full possession timeline and live stats
-- On-frame possession visualization (highlight + ball link)
+---
 
-### 4) Pass Counter
-- Automatic pass detection between teammates
-- Cumulative team pass statistics
-- Live on-screen pass updates
+## Frontend: dual mode without breaking local
 
-### 5) Web Application
-- End-to-end FastAPI web app
-- Video upload and live analysis processing
-- Real-time updates through WebSocket
-- Responsive dashboard with interactive charts
+In `static/app.js`:
+
+- **`legacy`:** host is `localhost` or `127.0.0.1` — uses `/api/*` and WebSocket as before.
+- **`jobs`:** host contains `run.app` (Cloud Run) — `POST /jobs` with `input_uri`, polling `GET /jobs/{id}` about every 2.5s; direct file upload in cloud shows a notice and expects a URL/URI.
+
+Static paths already use `/static/...`; no HTML change required for that.
+
+---
+
+## Analysis pipeline (where the code lives)
+
+Core orchestration:
+
+- `modules/match_analyzer.py` — micro-batching, `run_match_analysis`, `AnalysisConfig`
+- `modules/batch_processor.py` — detection, tracking, possession, space, NPZ/JSON export per batch as configured
+- `modules/video_sources.py` — uploaded file, YouTube, HLS, RTMP, Veo
+- `modules/match_state.py` — match state and persistence
+- `modules/spatial_possession_tracker.py`, `modules/field_*` — calibration and heatmaps
+
+Prediction and alerts:
+
+- `schemas/predictions.py`, `modules/event_prediction_engine.py`, `modules/prediction_metrics.py`, `modules/prediction_dispatcher.py`, `config/predictions.yaml`
+- Optional narrative: `modules/prediction_anthropic.py` (Anthropic); without API keys, deterministic text
+- Live alerts: `modules/match_alert_system.py` wired from the processor
+
+---
+
+## Environment variables (reference)
+
+Copy and adapt:
+
+- `.env.example` — general template
+- `.env.local.example` — local compose (Postgres + Redis)
+- `.env.cloud.example` — Cloud Run / Cloud SQL / GCS / Pub/Sub hints
+
+Common keys: `APP_ENV`, `STORAGE_BACKEND`, `QUEUE_BACKEND`, `DATABASE_URL`, `LOCAL_STORAGE_PATH`, `GCP_*`, `GCS_*`, `PUBSUB_*`, `REDIS_URL`, `MODEL_PATH`, `PORT`, `LOG_LEVEL`, etc. (see `app_service/config.py`).
+
+---
+
+## Database and migrations (Alembic)
+
+```bash
+export DATABASE_URL=sqlite:///./runtime_data/jobs.db
+./scripts/db_manage.sh init-local   # dirs, optional sqlite wipe, alembic upgrade head
+./scripts/db_manage.sh upgrade      # migrations only
+./scripts/db_manage.sh migrate "message"  # new autogenerated revision
+```
+
+In normal operation the jobs schema is **not** created with `create_all`; ephemeral test helpers exist if you need them (`build_ephemeral_test_session_factory` in `app_service/providers/database/session.py`).
+
+---
+
+## Worker
+
+```bash
+python worker/main.py
+# or ./scripts/run_worker_local.sh (Redis-oriented defaults in that script)
+```
+
+The worker uses `LocalPipelineRunner` → `modules.match_analyzer.run_match_analysis` (same pipeline as local).
+
+---
+
+## Docker and Google Cloud
+
+- `Dockerfile.web` — API image (`uvicorn app_service.main:app`)
+- `Dockerfile.worker` — worker image
+- `docker-compose.local.yml` — web + worker + redis + postgres
+- `docker-compose.cloud.yml` — GPU-oriented worker hints
+- `cloudbuild.yaml` — build and deploy to Cloud Run (Artifact Registry)
+- Scripts: `scripts/create_gcp_resources.sh`, `scripts/deploy_web.sh`, `scripts/deploy_worker_vm.sh`
+
+Detailed guides:
+
+- **[README_LOCAL.md](README_LOCAL.md)** — local dev, compose, E2E checks, CI
+- **[README_GCP.md](README_GCP.md)** — GCP resources, minimal deploy, Cloud SQL
+
+---
+
+## CI (GitHub Actions)
+
+On every **push** and **pull request** to `main`:
+
+1. `pip install -r requirements.txt` + test tooling
+2. DB init with Alembic (`./scripts/db_manage.sh init-local`)
+3. `pytest -q tests/test_dual_api_integration.py tests/test_worker_pipeline_real_call.py`
+
+Workflow file: `.github/workflows/ci.yml`
+
+---
+
+## Tests
+
+```bash
+pip install pytest pytest-asyncio httpx pytest-mock
+export DATABASE_URL=sqlite:///./runtime_data/jobs.db
+./scripts/db_manage.sh init-local
+pytest -q
+# prediction / alerts only:
+pytest -q tests/test_prediction_engine.py tests/test_alerts.py
+```
+
+Some tests patch heavy modules (`tests/conftest.py`) for fast legacy `app.py` checks; `app_service` tests use a real DB URL and migrations where applicable.
+
+---
+
+## CLI and legacy scripts
+
+- **`pruebatrackequipo.py`** — command-line processing (video + ReID, possession, etc.)
+- **`start_web.sh`** — web launcher if you use it in your setup
+- **`setup_check.py`** — environment sanity checks
+
+---
+
+## Academic / thesis documentation
+
+- **[docs/TFG_TacticEYE2.md](docs/TFG_TacticEYE2.md)** — long-form project write-up (TFG)
+
+---
+
+## Directory layout (overview)
+
+```text
+TacticEYE2_github/
+├── app.py                    # Legacy FastAPI + WebSocket + streaming analysis
+├── app_service/              # Dual API: jobs, providers, config
+├── worker/                   # Queue consumer + pipeline
+├── modules/                  # Vision and analysis engine
+├── schemas/                  # Pydantic (e.g. predictions)
+├── config/                   # YAML (predictions, attack direction)
+├── templates/                # index.html
+├── static/                   # app.js, style.css
+├── tests/
+├── scripts/                  # run_local, db_manage, deploy, etc.
+├── alembic/                  # migrations
+├── docker-compose*.yml
+├── Dockerfile.web
+├── Dockerfile.worker
+├── Dockerfile                # legacy / generic image in repo
+├── cloudbuild.yaml
+├── requirements.txt          # unified deps (web, cloud, alembic)
+├── .github/workflows/
+├── docs/
+└── weights/                  # YOLO weights (avoid committing huge blobs)
+```
+
+---
 
 ## Requirements
 
-### Hardware
-- NVIDIA GPU with CUDA recommended (minimum 6 GB VRAM)
-- 8 GB RAM minimum
-- 2 GB free storage
+- **Python:** 3.10+ (CI uses 3.11)
+- **Hardware:** NVIDIA GPU recommended for reasonable full-match throughput; CPU works but is slower
+- **Weights:** place `weights/best.pt` (or set `MODEL_PATH`)
 
-### Software
-- Python 3.8+
-- CUDA 11.8+ (GPU mode)
+---
 
-## Installation
+## Quick troubleshooting
 
-### 1. Clone repository
-```bash
-git clone https://github.com/TuUsuario/TacticEYE2.git
-cd TacticEYE2
-```
+| Issue | Hint |
+|-------|------|
+| `table jobs already exists` with Alembic | Do not mix ad-hoc `create_all` with Alembic on the same DB; use `./scripts/db_manage.sh init-local` |
+| Cloud Run UI without live stats | On `run.app`, `jobs` mode does not use WebSocket; extend polling or wire streaming endpoints |
+| Dependencies | This branch uses **`requirements.txt` only** (no `requirements_web.txt`) |
 
-### 2. Create virtual environment
-```bash
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# or
-venv\Scripts\activate     # Windows
-```
+---
 
-### 3. Install dependencies
-```bash
-pip install --upgrade pip
-pip install -r requirements.txt
-pip install -r requirements_web.txt
-```
+## License and acknowledgements
 
-### 4. Validate setup
-```bash
-python setup_check.py
-```
+- License: **MIT** — see `LICENSE`
+- Detection: [Ultralytics YOLO](https://github.com/ultralytics/ultralytics)
+- ReID / references: see historical notes and `docs/TFG_TacticEYE2.md`
 
-## Usage
-
-### Web App (Recommended)
-
-1. Start server:
-```bash
-python app.py
-```
-
-Default port is `8001` (to avoid common `8000` conflicts). If busy, a free port is selected automatically.
-
-2. Open in browser:
-```
-http://localhost:8001
-```
-
-To force a specific port:
-```bash
-PORT=8010 python app.py
-```
-
-3. In the UI:
-- Upload a video (`.mp4`, `.avi`, etc.)
-- Analysis starts automatically
-- Monitor live stats:
-  - Team possession (%)
-  - Completed passes
-  - Possession timeline
-  - Interactive charts
-
-### Command Line
-
-Basic run:
-```bash
-python pruebatrackequipo.py video.mp4 --model weights/best.pt --reid
-```
-
-High-precision possession setup:
-```bash
-python pruebatrackequipo.py video.mp4 \
-    --model weights/best.pt \
-    --reid \
-    --possession-distance 40
-```
-
-Faster run without preview window:
-```bash
-python pruebatrackequipo.py video.mp4 \
-    --model weights/best.pt \
-    --reid \
-    --no-show \
-    --output result.mp4
-```
-
-## Main CLI Parameters
-
-### YOLO Detection
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `--model` | YOLO model path | `yolov8n.pt` |
-| `--imgsz` | Input image size | `640` |
-| `--conf` | Confidence threshold | `0.35` |
-| `--max-det` | Max detections | `100` |
-
-### ReID Tracking
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `--reid` | Enable ReID tracker | `False` |
-
-### Team Classification (V2)
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `--tc-kmeans-min-tracks` | Minimum tracks for KMeans | `12` |
-| `--tc-vote-history` | Voting history size | `4` |
-| `--tc-use-L` | Use L* channel | `True` |
-| `--tc-L-weight` | L* channel weight | `0.5` |
-
-### Team Classification (V3, Experimental)
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `--use-v3` | Enable TeamClassifierV3 | `False` |
-| `--v3-recalibrate` | Recalibrate every N frames | `300` |
-| `--v3-variance` | Use variance features | `True` |
-| `--v3-adaptive-thresh` | Adaptive thresholds | `True` |
-| `--v3-hysteresis` | Temporal hysteresis | `True` |
-
-### Possession
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `--possession-distance` | Max distance (pixels) | `60` |
-
-### Output
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `--no-show` | Disable preview window | `False` |
-| `--output` | Save processed video | `None` |
-
-## Project Structure
-
-```text
-TacticEYE2/
-├── modules/
-│   ├── reid_tracker.py
-│   ├── team_classifier.py
-│   ├── team_classifier_v2.py
-│   ├── possession_tracker.py
-│   └── possession_tracker_v2.py
-├── weights/
-│   └── best.pt
-├── pruebatrackequipo.py
-├── app.py
-├── setup_check.py
-├── config.yaml
-├── requirements.txt
-└── requirements_web.txt
-```
-
-## Troubleshooting
-
-### `KeyError: -1`
-Invalid `team_id` values (typically referees) are filtered automatically by the pipeline.
-
-### Inaccurate team classification
-Try V3 mode:
-```bash
---use-v3 --v3-recalibrate 300
-```
-
-### Possession switches too quickly
-Reduce possession distance:
-```bash
---possession-distance 40
-```
-
-### Slow processing
-Lower resolution and disable preview:
-```bash
---imgsz 416 --no-show
-```
-
-## YOLO Classes
-
-- `0`: `player`
-- `1`: `ball`
-- `2`: `referee`
-- `3`: `goalkeeper`
-
-## Roadmap
-
-- Field calibration (2D -> 3D homography)
-- Team heatmaps
-- Advanced physical stats (distance, speed)
-- Professional broadcast overlays
-- Full exports (CSV, JSON, NPZ)
-- Event detection extensions
+---
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m "Add AmazingFeature"`)
-4. Push branch (`git push origin feature/AmazingFeature`)
-5. Open a pull request
+1. Fork → feature branch → changes with tests and green CI  
+2. Pull request to `main`
 
-## License
-
-This project is licensed under the MIT License.
-
-## Acknowledgements
-
-- [Ultralytics YOLO](https://github.com/ultralytics/ultralytics)
-- [OSNet](https://github.com/KaiyangZhou/deep-person-reid)
-- Computer Vision community
+If you change the DB schema, add an Alembic revision and document new variables in `.env.example`.
