@@ -1,4 +1,4 @@
-# TacticEYE2 — Tactical football video analysis
+# TacticAI — Tactical football video analysis
 
 Video match analysis with YOLO detection, ReID tracking, team classification, possession, passes, field calibration, heatmaps, and **algorithmic event prediction** with live alerts. The same codebase can run **locally** (classic WebSocket flow) or deploy as an **API + worker** stack aimed at Google Cloud.
 
@@ -307,7 +307,7 @@ Some tests patch heavy modules (`tests/conftest.py`) for fast legacy `app.py` ch
 ## Directory layout (overview)
 
 ```text
-TacticEYE2_github/
+.
 ├── app.py                    # Legacy FastAPI + WebSocket + streaming analysis
 ├── app_service/              # Dual API: jobs, providers, config
 ├── worker/                   # Queue consumer + pipeline

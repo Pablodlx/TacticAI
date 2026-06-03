@@ -19,7 +19,7 @@ from app_service.services.jobs import JobService
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title="TacticEYE2 Dual API")
+    app = FastAPI(title="TacticAI Dual API")
 
     templates = Jinja2Templates(directory="templates")
 

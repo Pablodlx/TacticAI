@@ -1,4 +1,4 @@
-# TacticEYE2 Local (Dual Architecture)
+# TacticAI Local (Dual Architecture)
 
 ## 1) Run legacy local UI (backward compatible)
 ```bash

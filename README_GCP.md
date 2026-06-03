@@ -1,4 +1,4 @@
-# TacticEYE2 on Google Cloud
+# TacticAI on Google Cloud
 
 ## Architecture
 - Web API on Cloud Run (`app_service.main`)

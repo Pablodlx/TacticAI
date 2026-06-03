@@ -43,7 +43,7 @@ except Exception as e:
     traceback.print_exc()
     raise  # Re-lanzar el error para que sea visible
 
-app = FastAPI(title="TacticEYE2 Web")
+app = FastAPI(title="TacticAI Web")
 
 # Configurar CORS
 app.add_middleware(
@@ -1448,7 +1448,7 @@ if __name__ == "__main__":
 
     local_host = "localhost" if host == "0.0.0.0" else host
     print("\n" + "="*60)
-    print("🚀 TacticEYE2 Web Application")
+    print("🚀 TacticAI Web Application")
     print("="*60)
     print("\n📱 Abre en tu navegador:")
     print(f"   http://{local_host}:{port}")

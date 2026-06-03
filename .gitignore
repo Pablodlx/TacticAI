@@ -62,7 +62,10 @@ results/
 exports/
 match_states/
 outputs_streaming/
+
+# TFG academic docs & thesis folder (large, not part of deployable code)
 TFGs/
+docs/
 
 # Large files
 *.mp4
@@ -71,10 +74,6 @@ TFGs/
 *.mkv
 *.flv
 *.webm
-
-# Model weights (uncomment if not tracking)
-# weights/*.pt
-# weights/*.pth
 
 # Data files
 *.npz
@@ -97,11 +96,14 @@ temp/
 # JSON exports (uncomment to ignore)
 # outputs/**/*.json
 
-# OS
+# OS / Windows artifacts
 Thumbs.db
 .DS_Store
 *:Zone.Identifier
 *.Zone.Identifier
+*:zone.identifier
+*.zone.identifier
+**:Zone.Identifier
 
 # PyTorch
 *.pth.tar
