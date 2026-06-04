@@ -1,20 +1,15 @@
-# Ignore large video files (prevent pushing heavy mp4s)
-# Add specific patterns if needed for other media types
+# Runtime data (DB, job workspace, uploads) — generado en ejecución, no versionar
+runtime_data/
+uploads/
+
+# Ignore large video files
 *.mp4
 *.MP4
-
-# Optionally ignore other large video formats
 *.mov
 *.MOV
 *.avi
 
-# Keep repository folders but ignore generated outputs (uncomment if desired)
-# outputs/
-# outputs_test/
-# outputs_full/
-
-# Debug artifacts
-# debug_*/
+# Output directories — generados en ejecución
 # Python
 __pycache__/
 *.py[cod]

@@ -20,8 +20,10 @@ outputs_test/
 outputs_streaming/
 outputs_heatmap/
 
-# Weights (se montan como volumen en docker-compose)
-weights/
+# Weights: solo excluir artefactos de entrenamiento, incluir checkpoints
+weights/field_kp_merged_fast/*.png
+weights/field_kp_merged_fast/*.jpg
+weights/field_kp_merged_fast/*.csv
 
 # Tests y docs
 tests/

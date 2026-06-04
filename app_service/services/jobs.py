@@ -13,6 +13,23 @@ from app_service.providers.queue.sync import SyncQueueProvider
 from app_service.providers.storage.base import StorageProvider
 
 
+def _summary_to_partial(summary: dict, batch_idx: int) -> dict:
+    pct = summary.get("possession", {}).get("percent_by_team", {})
+    secs = summary.get("possession", {}).get("seconds_by_team", {})
+    passes = summary.get("passes", {}).get("by_team", {})
+    progress = summary.get("progress", {})
+    alerts = summary.get("alerts", [])
+    return {
+        "batch_idx": batch_idx,
+        "total_frames": progress.get("total_frames", 0),
+        "total_seconds": progress.get("total_seconds", 0),
+        "possession_percent": [pct.get(0, 0), pct.get(1, 0)],
+        "possession_seconds": [secs.get(0, 0), secs.get(1, 0)],
+        "passes": [passes.get(0, 0), passes.get(1, 0)],
+        "alerts": alerts[-10:] if alerts else [],
+    }
+
+
 class JobService:
     def __init__(
         self,
@@ -33,6 +50,11 @@ class JobService:
         safe = filename.replace("/", "_")
         name = f"inputs/{uuid.uuid4()}_{safe}"
         return self.storage.upload_bytes(content, name)
+
+    def get_upload_url(self, filename: str) -> tuple[str, str]:
+        safe = filename.replace("/", "_")
+        name = f"inputs/{uuid.uuid4()}_{safe}"
+        return self.storage.generate_upload_signed_url(name)
 
     def create_job(self, input_uri: str, extra_config: dict | None = None) -> str:
         job_id = str(uuid.uuid4())
@@ -69,7 +91,30 @@ class JobService:
         os.makedirs(output_dir, exist_ok=True)
         try:
             self.storage.download_to_path(input_uri, local_video)
-            result = self.analysis_runner.run(job_id=job_id, local_input_path=local_video, output_dir=output_dir)
+
+            def on_batch_complete(match_id, batch_idx, chunk_output, match_state, processor=None):
+                try:
+                    summary = match_state.get_summary()
+                    partial = _summary_to_partial(summary, batch_idx)
+                    if processor is not None:
+                        st = getattr(processor, "spatial_tracker", None)
+                        if st is not None:
+                            hm0 = st.export_heatmap(team_id=0, normalize=True)
+                            hm1 = st.export_heatmap(team_id=1, normalize=True)
+                            if hm0 is not None:
+                                partial["heatmap_team_0"] = hm0.tolist()
+                            if hm1 is not None:
+                                partial["heatmap_team_1"] = hm1.tolist()
+                    self.storage.upload_text(json.dumps(partial), f"partials/{job_id}.json")
+                except Exception:
+                    pass
+
+            result = self.analysis_runner.run(
+                job_id=job_id,
+                local_input_path=local_video,
+                output_dir=output_dir,
+                on_batch_complete=on_batch_complete,
+            )
             result_path = os.path.join(tmp_dir, "result.json")
             with open(result_path, "w", encoding="utf-8") as f:
                 json.dump(result, f)

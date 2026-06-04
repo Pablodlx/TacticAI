@@ -35,6 +35,7 @@ class AnalysisConfig:
     
     # Modelo
     model_path: str = "weights/best.pt"
+    preloaded_model: Optional[Any] = None
     device: str = "cuda"
     conf_threshold: float = 0.3
     imgsz: int = 640
@@ -155,6 +156,7 @@ def run_match_analysis(
             # 3. INICIALIZAR PROCESADOR
             processor = BatchProcessor(
                 model_path=config.model_path,
+                preloaded_model=config.preloaded_model,
                 device=config.device,
                 conf_threshold=config.conf_threshold,
                 imgsz=config.imgsz,
@@ -255,7 +257,7 @@ def run_match_analysis(
                     
                     # Callback de batch completo
                     if config.on_batch_complete:
-                        config.on_batch_complete(match_id, batch_idx, chunk_output, match_state)
+                        config.on_batch_complete(match_id, batch_idx, chunk_output, match_state, processor)
                     
                     print()
                 

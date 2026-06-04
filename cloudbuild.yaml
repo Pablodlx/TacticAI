@@ -28,5 +28,5 @@ steps:
       - ${_REGION}
       - --platform
       - managed
-      - --allow-unauthenticated
+      - --no-allow-unauthenticated
 

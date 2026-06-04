@@ -1,0 +1,48 @@
+substitutions:
+  _REGION: europe-west1
+  _REPO: tacticeye
+  _SERVICE: tacticeye2-demo
+
+steps:
+  # Construye la imagen con PyTorch (Dockerfile.worker tiene YOLO + ultralytics)
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.worker
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/demo:latest
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/demo:latest
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/demo:latest
+      - --region
+      - ${_REGION}
+      - --platform
+      - managed
+      - --allow-unauthenticated
+      - --min-instances
+      - "0"
+      - --max-instances
+      - "1"
+      - --memory
+      - 4Gi
+      - --cpu
+      - "2"
+      - --timeout
+      - "3600"
+      - --concurrency
+      - "1"
+      - --set-env-vars
+      - QUEUE_BACKEND=sync,STORAGE_BACKEND=local,DATABASE_URL=sqlite:///./runtime_data/jobs.db,MODEL_PATH=weights/best.pt,PYTHONUNBUFFERED=1

@@ -123,6 +123,7 @@ class BatchProcessor:
     def __init__(
         self,
         model_path: str = "weights/best.pt",
+        preloaded_model=None,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         conf_threshold: float = 0.3,
         iou_threshold: float = 0.45,
@@ -165,9 +166,12 @@ class BatchProcessor:
         self.iou_threshold = iou_threshold
         self.imgsz = imgsz
         
-        # Cargar modelo YOLO
-        print(f"Cargando modelo YOLO desde {model_path}...")
-        self.model = YOLO(model_path)
+        # Cargar modelo YOLO (reutilizar si viene pre-cargado)
+        if preloaded_model is not None:
+            self.model = preloaded_model
+        else:
+            print(f"Cargando modelo YOLO desde {model_path}...")
+            self.model = YOLO(model_path)
         self.model.to(device)
         
         # Parámetros guardados para reinicializar módulos
@@ -409,6 +413,13 @@ class BatchProcessor:
         match_state.possession_state.frames_by_team = self.possession_tracker.total_frames_by_team.copy()
         match_state.possession_state.passes_by_team = self.possession_tracker.passes_by_team.copy()
         match_state.possession_state.last_frame_idx = match_state.total_frames_processed
+
+        # Guardar timeline completo (start, end, team) para el gráfico de posesión
+        timeline = self.possession_tracker.get_possession_timeline()
+        match_state.possession_state.possession_changes = [
+            {'frame': int(start), 'end_frame': int(end), 'team': int(team)}
+            for start, end, team in timeline
+        ]
     
     def _create_annotated_frame(self, frame: np.ndarray, tracked_objects: list, frame_idx: int, keypoints: dict = None) -> np.ndarray:
         """

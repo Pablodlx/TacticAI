@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
 from app_service.api.deps import get_job_service
 
@@ -12,6 +12,15 @@ def health():
 @router.post("/health")
 def health_post():
     return {"ok": True}
+
+
+@router.get("/jobs/upload-url")
+def get_upload_url(filename: str = Query(...), service=Depends(get_job_service)):
+    try:
+        upload_url, input_uri = service.get_upload_url(filename)
+    except NotImplementedError:
+        raise HTTPException(status_code=501, detail="Signed URLs not supported in this environment")
+    return {"upload_url": upload_url, "input_uri": input_uri}
 
 
 @router.post("/jobs/upload")
@@ -47,6 +56,21 @@ def get_job(job_id: str, service=Depends(get_job_service)):
         "started_at": job.started_at,
         "finished_at": job.finished_at,
     }
+
+
+@router.get("/jobs/{job_id}/partial")
+def get_job_partial(job_id: str, service=Depends(get_job_service)):
+    job = service.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    raw = service.storage.read_text_safe(f"partials/{job_id}.json")
+    if raw is None:
+        return {"available": False}
+    import json
+    try:
+        return {"available": True, **json.loads(raw)}
+    except Exception:
+        return {"available": False}
 
 
 @router.get("/jobs/{job_id}/results")

@@ -1,0 +1,17 @@
+# Dependencias de la API web (sin PyTorch ni visión — la API no ejecuta inferencia)
+numpy>=1.21.0
+pydantic>=2.0.0
+pydantic-settings>=2.2.1
+fastapi>=0.110.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+jinja2>=3.1.0
+websockets>=12.0
+sqlalchemy>=2.0.0
+alembic>=1.13.2
+anthropic>=0.70.0
+google-cloud-storage>=2.16.0
+google-cloud-pubsub>=2.21.1
+redis>=5.0.4
+psycopg2-binary>=2.9.9
+pyyaml>=6.0

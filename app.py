@@ -968,7 +968,7 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
             except Exception as e:
                 print(f"Error en on_frame_visualized: {e}")
         
-        def on_batch_complete(match_id, batch_idx, chunk_output, match_state):
+        def on_batch_complete(match_id, batch_idx, chunk_output, match_state, processor=None):
             # Actualizar stats en tiempo real
             try:
                 # Obtener resumen de estadísticas acumuladas
@@ -1114,15 +1114,16 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
             for team_id in [0, 1]:
                 passes[team_id] = possession_stats.passes_by_team.get(team_id, 0)
 
-        # Construir timeline de posesión (si está disponible)
+        # Construir timeline de posesión (segmentos [start, end, team])
         timeline = []
         if hasattr(possession_stats, 'possession_changes') and possession_stats.possession_changes:
             for change in possession_stats.possession_changes:
                 if isinstance(change, dict):
-                    frame = change.get('frame', 0)
+                    start = change.get('frame', 0)
+                    end = change.get('end_frame', start + 1)
                     team = change.get('team', -1)
                     if team >= 0:
-                        timeline.append([frame, frame + 1, team])
+                        timeline.append([start, end, team])
 
         final_stats = {
             "total_frames": total_frames,

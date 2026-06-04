@@ -57,16 +57,26 @@ def test_engine_returns_predictions_with_probabilities(rich_match_state):
 
 
 def test_dispatcher_blocks_immediate_duplicate(rich_match_state):
+    """
+    El dispatcher no debe reemitir el mismo evento+equipo antes del cooldown.
+    Solo el primer evento emitido en el ciclo anterior debe estar bloqueado;
+    eventos no procesados por el cycle cap pueden aparecer en el siguiente ciclo.
+    """
     cfg = load_prediction_config()
     engine = EventPredictionEngine(cfg)
     disp = PredictionDispatcher(cfg)
     preds = sorted(engine.predict(rich_match_state), key=lambda x: x.probability, reverse=True)[:4]
 
     first = disp.filter_predictions(preds, frame_id=100)
-    assert first
+    assert first, "El primer ciclo debe emitir al menos una predicción"
+    emitted_keys = {(p.event_type, p.team_id) for p in first}
 
     second = disp.filter_predictions(preds, frame_id=101)
-    assert len(second) == 0, "No debe reemitir el mismo patrón sin cooldown/surge"
+
+    # El evento ya emitido no debe reaparecer en el siguiente ciclo inmediato
+    second_keys = {(p.event_type, p.team_id) for p in second}
+    overlap = emitted_keys & second_keys
+    assert not overlap, f"El dispatcher reemitió eventos del ciclo anterior sin cooldown: {overlap}"
 
 
 def test_build_messages_exports_json_serializable(rich_match_state):

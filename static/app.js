@@ -339,8 +339,37 @@ async function uploadVideo() {
     
     try {
         if (getApiMode() === 'jobs') {
-            statusDiv.innerHTML = '<div class="alert alert-warning"><i class="fas fa-info-circle me-2"></i>La subida directa aún no está conectada en la versión cloud. Usa una URL/URI de entrada.</div>';
-            uploadBtn.disabled = false;
+            // Step 1: get a signed GCS URL (avoids Cloud Run's 32MB body limit)
+            statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin me-2"></i>Preparando subida...</div>';
+            const urlResp = await fetch(`/jobs/upload-url?filename=${encodeURIComponent(file.name)}`);
+            const urlData = await safeFetchJson(urlResp);
+            if (!urlData.upload_url || !urlData.input_uri) throw new Error('No se recibió URL de subida');
+
+            // Step 2: PUT directly to GCS — bypasses Cloud Run completely
+            statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin me-2"></i>Subiendo video a la nube...</div>';
+            const putResp = await fetch(urlData.upload_url, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/octet-stream' },
+                body: file
+            });
+            if (!putResp.ok) throw new Error(`Error subiendo a GCS: ${putResp.status}`);
+
+            // Step 3: create the analysis job
+            statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin me-2"></i>Creando job de análisis...</div>';
+            const jobResp = await fetch('/jobs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ input_uri: urlData.input_uri })
+            });
+            const jobData = await safeFetchJson(jobResp);
+            currentSessionId = jobData.id || jobData.job_id || null;
+            if (!currentSessionId) throw new Error('No se recibió job_id');
+
+            statusDiv.innerHTML = '<div class="alert alert-success"><i class="fas fa-check-circle me-2"></i>Video subido. Analizando...</div>';
+            document.getElementById('upload-section').style.display = 'none';
+            document.getElementById('progress-section').style.display = 'block';
+            initializeChatbot();
+            startJobsPolling(currentSessionId);
             return;
         }
 
@@ -400,9 +429,31 @@ function startJobsPolling(jobId) {
             }
 
             if (status === 'running') {
-                if (progressText) progressText.textContent = 'Procesando job...';
-                if (progressBarFill) progressBarFill.style.width = '60%';
-                if (progressPercent) progressPercent.textContent = '60%';
+                try {
+                    const partialResp = await fetch(`/jobs/${jobId}/partial`);
+                    const partial = await safeFetchJson(partialResp);
+                    if (partial.available) {
+                        const batch = partial.batch_idx || 0;
+                        if (progressText) progressText.textContent = `Procesando... lote ${batch + 1} completado`;
+                        if (progressBarFill) progressBarFill.style.width = '60%';
+                        if (progressPercent) progressPercent.textContent = `Lote ${batch + 1}`;
+                        showResults(partial);
+                        // Renderizar heatmaps parciales si están disponibles
+                        if (partial.heatmap_team_0) {
+                            const img0 = document.getElementById('heatmap-team-0');
+                            if (img0) renderHeatmapToImg(partial.heatmap_team_0, img0);
+                        }
+                        if (partial.heatmap_team_1) {
+                            const img1 = document.getElementById('heatmap-team-1');
+                            if (img1) renderHeatmapToImg(partial.heatmap_team_1, img1);
+                        }
+                    } else {
+                        if (progressText) progressText.textContent = 'Iniciando análisis...';
+                        if (progressBarFill) progressBarFill.style.width = '20%';
+                    }
+                } catch (_) {
+                    if (progressText) progressText.textContent = 'Procesando...';
+                }
                 return;
             }
 
@@ -412,7 +463,23 @@ function startJobsPolling(jobId) {
                 if (progressBarFill) progressBarFill.style.width = '100%';
                 if (progressPercent) progressPercent.textContent = '100%';
                 if (progressText) progressText.textContent = 'Completado';
-                showResults({ total_seconds: 0, total_frames: 0, possession_percent: [0, 0], possession_seconds: [0, 0], passes: [0, 0], timeline: [] });
+                const resultsResp = await fetch(`/jobs/${jobId}/results`);
+                const resultsData = await safeFetchJson(resultsResp);
+                if (resultsData.result) {
+                    const parsed = typeof resultsData.result === 'string' ? JSON.parse(resultsData.result) : resultsData.result;
+                    const summary = parsed.summary || parsed;
+                    const pct = summary.possession?.percent_by_team || {};
+                    const secs = summary.possession?.seconds_by_team || {};
+                    const passes = summary.passes?.by_team || {};
+                    showResults({
+                        total_seconds: summary.progress?.total_seconds || 0,
+                        total_frames: summary.progress?.total_frames || 0,
+                        possession_percent: [pct[0] || 0, pct[1] || 0],
+                        possession_seconds: [secs[0] || 0, secs[1] || 0],
+                        passes: [passes[0] || 0, passes[1] || 0],
+                        alerts: summary.alerts || [],
+                    });
+                }
                 return;
             }
 
@@ -1289,6 +1356,45 @@ function updateTopZonesFromSpatial(teamId, spatial) {
     if (zonePercentages) {
         updateTopZones(teamId, zonePercentages);
     }
+}
+
+// Renderizar heatmap 2D (array de arrays) en un elemento <img> via canvas
+function renderHeatmapToImg(grid, imgElement) {
+    if (!grid || !grid.length) return;
+    const rows = grid.length;
+    const cols = grid[0].length;
+    const canvas = document.createElement('canvas');
+    canvas.width = cols * 8;
+    canvas.height = rows * 8;
+    const ctx = canvas.getContext('2d');
+
+    // Fondo campo verde
+    ctx.fillStyle = '#2d5016';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Heatmap (colormap: transparente→amarillo→rojo)
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            const v = Math.min(1, Math.max(0, grid[r][c]));
+            if (v < 0.01) continue;
+            const red = Math.round(255 * Math.min(1, v * 2));
+            const green = Math.round(255 * Math.max(0, 1 - v * 2));
+            ctx.fillStyle = `rgba(${red},${green},0,${0.3 + v * 0.65})`;
+            ctx.fillRect(c * 8, r * 8, 8, 8);
+        }
+    }
+
+    // Líneas del campo
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+    ctx.lineWidth = 1.5;
+    const w = canvas.width, h = canvas.height;
+    ctx.strokeRect(2, 2, w - 4, h - 4);          // Borde
+    ctx.beginPath(); ctx.moveTo(w / 2, 0); ctx.lineTo(w / 2, h); ctx.stroke(); // Línea central
+    ctx.beginPath(); ctx.arc(w / 2, h / 2, h * 0.18, 0, Math.PI * 2); ctx.stroke(); // Círculo
+
+    imgElement.src = canvas.toDataURL('image/png');
+    const section = document.getElementById('spatial-heatmaps-section');
+    if (section) section.style.display = 'block';
 }
 
 // Actualizar imágenes de heatmaps

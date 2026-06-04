@@ -40,3 +40,6 @@ class LocalStorageProvider(StorageProvider):
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
 
+    def upload_text(self, text: str, destination_name: str) -> str:
+        return self.upload_bytes(text.encode("utf-8"), destination_name)
+

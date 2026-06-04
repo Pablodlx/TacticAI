@@ -1,38 +1,45 @@
 # TacticAI — Tactical football video analysis
 
-Video match analysis with YOLO detection, ReID tracking, team classification, possession, passes, field calibration, heatmaps, and **algorithmic event prediction** with live alerts. The same codebase can run **locally** (classic WebSocket flow) or deploy as an **API + worker** stack aimed at Google Cloud.
+Tactical analysis from standard broadcast video — no additional hardware required. YOLO detection, ReID tracking, team classification, possession, passes, field homography, heatmaps, and heuristic event prediction with live alerts. Runs **locally** (monolithic WebSocket flow) or as a **decoupled API + worker** stack deployable on Google Cloud.
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-red)](https://pytorch.org/)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](https://www.python.org/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.x-red)](https://pytorch.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110-009688)](https://fastapi.tiangolo.com/)
+[![CI](https://github.com/Pablodlx/TacticEYE2_github/actions/workflows/ci.yml/badge.svg)](https://github.com/Pablodlx/TacticEYE2_github/actions)
 
 ---
 
-## Repository map (summary)
+## Key metrics (from evaluation)
+
+| Model | mAP@0.5 | mAP@0.5:0.95 | Inference |
+|-------|---------|--------------|-----------|
+| YOLO11m detector (player, ball, referee, goalkeeper) | **0.893** | 0.645 | ~26 ms/frame (RTX 5070 Ti) |
+| YOLO11m field keypoints (15 types) | **0.956** | 0.663 | ~10 ms/frame |
+
+Full pipeline (YOLO + ReID + TeamClassifier + Possession + Heatmaps + Serialization): **~60–65 ms/frame** on RTX 5070 Ti Laptop → ≈16 FPS effective (≈1.5× real-time duration). CPU-only fallback available.
+
+---
+
+## Repository map
 
 | Area | Contents |
 |------|----------|
-| **CV pipeline** | `modules/` — YOLO, ReID, teams, possession, space, heatmaps, homography, alerts |
-| **Legacy web** | `app.py` — upload, batched analysis, WebSocket, heatmap APIs |
-| **Dual API (jobs)** | `app_service/` — FastAPI jobs API, pluggable storage/queue/DB |
-| **Worker** | `worker/` — consumes queue and runs the same pipeline via `run_match_analysis` |
+| **CV pipeline** | `modules/` — YOLO, ReID, teams, possession, spatial, heatmaps, homography, alerts |
+| **Legacy web** | `app.py` — upload, batched analysis, WebSocket streaming, heatmap APIs |
+| **Dual API (jobs)** | `app_service/` — FastAPI jobs API, pluggable storage/queue/DB providers |
+| **Worker** | `worker/` — queue consumer, runs the same pipeline via `run_match_analysis` |
 | **UI** | `templates/index.html`, `static/app.js`, `static/style.css` |
-| **Infra** | Dockerfiles, compose, `cloudbuild.yaml`, `scripts/` |
-| **DB** | SQLAlchemy + **Alembic** (`alembic/`, `scripts/db_manage.sh`) |
-| **CI** | `.github/workflows/ci.yml` |
-| **Tests** | `tests/` |
-| **Docs** | `README_LOCAL.md`, `README_GCP.md`, `docs/TFG_TacticEYE2.md` |
+| **Infra** | `Dockerfile.web`, `Dockerfile.worker`, compose files, `cloudbuild*.yaml`, `scripts/` |
+| **DB** | SQLAlchemy + Alembic (`alembic/`, `scripts/db_manage.sh`) |
+| **Config** | `config/` — `predictions.yaml`, `soccernet.yaml`, `attack_direction.yaml` |
+| **CI/CD** | `.github/workflows/ci.yml` (tests) + `cloudbuild.yaml` (deploy) |
+| **Tests** | `tests/` — 88 tests across 11 files |
 
 ---
 
-## Two ways to run the backend
+## Two ways to run
 
-### 1) Legacy mode (recommended for the full local UI)
-
-- **Entry:** `python app.py`
-- **API:** `/api/upload`, `/api/analyze/{session_id}`, `/api/analyze/url`, `/api/heatmap/...`, `/api/attack-direction`, WebSocket `/ws/{session_id}`
-- **UI:** templates and static files served from `app.py`
-- **Port:** default `8001` (or `PORT`); if busy, another port may be chosen automatically
+### 1) Legacy mode (recommended for local UI + WebSocket)
 
 ```bash
 pip install -r requirements.txt
@@ -40,186 +47,157 @@ python app.py
 # Open http://localhost:8001 (or the port printed in the console)
 ```
 
-### 2) Dual API + same UI (`app_service`)
+- **Entry:** `python app.py`
+- **Routes:** `/api/upload`, `/api/analyze/{session_id}`, `/api/heatmap/...`, WebSocket `/ws/{session_id}`
+- **Port:** `8001` by default (or `PORT` env var)
 
-- **Entry:** `uvicorn app_service.main:app` (or `./scripts/run_local.sh`)
-- **Routes:** `/` (HTML), `/static/...`, `/health`, `/jobs`, `/jobs/upload`, `/jobs/{id}`, `/jobs/{id}/results`
-- **Jobs:** configurable queue (`sync`, `redis`, `pubsub`), storage (`local`, `gcs`), database via `DATABASE_URL`
-- **Schema:** normal path uses **Alembic** only (`./scripts/db_manage.sh`)
+### 2) Dual API + worker (`app_service`)
 
 ```bash
 export DATABASE_URL=sqlite:///./runtime_data/jobs.db
 ./scripts/db_manage.sh init-local
 ./scripts/run_local.sh
-# Default PORT=8000 in the script; override with export PORT=...
+# Open http://localhost:8000
 ```
 
----
+- **Entry:** `uvicorn app_service.main:app` (wrapped by `scripts/run_local.sh`)
+- **Routes:** `POST /jobs/upload`, `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/results`, `GET /health`
+- **Jobs:** configurable queue (`sync`, `redis`, `pubsub`), storage (`local`, `gcs`), DB via `DATABASE_URL`
 
-## Frontend: dual mode without breaking local
-
-In `static/app.js`:
-
-- **`legacy`:** host is `localhost` or `127.0.0.1` — uses `/api/*` and WebSocket as before.
-- **`jobs`:** host contains `run.app` (Cloud Run) — `POST /jobs` with `input_uri`, polling `GET /jobs/{id}` about every 2.5s; direct file upload in cloud shows a notice and expects a URL/URI.
-
-Static paths already use `/static/...`; no HTML change required for that.
+Full guide → [README_LOCAL.md](README_LOCAL.md)
 
 ---
 
-## Analysis pipeline (end-to-end)
+## Frontend: dual mode
 
-This section describes **what actually runs** when you analyze a match: data flow, checkpoints, and which `modules/` files participate.
+`static/app.js` detects the environment automatically:
+
+- **`legacy`** (localhost / 127.0.0.1) — uses `/api/*` and WebSocket live streaming
+- **`jobs`** (Cloud Run `run.app`) — `POST /jobs`, polls `GET /jobs/{id}` every ~2.5 s; file upload shows a notice in cloud mode
+
+---
+
+## Analysis pipeline
 
 ### What the pipeline produces
 
-From raw video the stack derives:
+From raw video:
 
-- **Per-frame detections** — bounding boxes, class (`player`, `ball`, `referee`, `goalkeeper`), track IDs, team IDs for outfield players
-- **Possession and passes** — ball–player proximity in image space, smoothed possession team/player, **possession-change** and **pass** events when the tracker state changes
-- **Optional field / spatial layer** — field line keypoints, homography (with flip resolution), player feet projected to **105×68 m** pitch coordinates, **zone** labels, **heatmap** grids per team
-- **Alerts** — `MatchAlertSystem` combines zone/possession/passing heuristics with **event scores** from `EventPredictionEngine` (linear metrics + sigmoid, driven by `config/predictions.yaml`), optional Anthropic wording (`prediction_anthropic.py`), and dispatches via `prediction_dispatcher.py`
+- **Per-frame detections** — bounding boxes, class (`player`, `ball`, `referee`, `goalkeeper`), persistent track IDs, team IDs
+- **Possession and passes** — ball–player proximity in image space, smoothed possession, pass/recovery events
+- **Spatial layer** (optional) — field keypoints → homography → player feet in **105×68 m** pitch coordinates → zone labels → heatmap grids per team
+- **Tactical alerts** — `MatchAlertSystem` combines zone/possession heuristics with `EventPredictionEngine` scores (linear metrics + sigmoid, driven by `config/predictions.yaml`); optional natural-language wording via Anthropic API
 
-All of that is implemented inside **`BatchProcessor.process_chunk()`** and orchestrated by **`run_match_analysis()`**.
+All implemented in **`BatchProcessor.process_chunk()`**, orchestrated by **`run_match_analysis()`**.
 
-### Entry points (same engine, different shells)
+### Entry points (same engine, three shells)
 
 | Entry | File | Role |
 |-------|------|------|
-| Legacy web | `app.py` | Builds `AnalysisConfig`, wires WebSocket callbacks (`on_batch_complete`, `on_progress`, `on_frame_visualized`), optional `AttackDirectionManager` per session |
-| Core API | `modules/match_analyzer.py` | **`run_match_analysis(match_id, config, resume=True)`** — load video, micro-batches, persist state, invoke callbacks |
-| Jobs / worker | `app_service/providers/analysis/local.py` | **`LocalPipelineRunner`** — `AnalysisConfig` + `run_match_analysis(..., resume=False)` for uploaded files |
-
-There is no second vision stack for cloud: the worker calls the same `run_match_analysis` path.
+| Legacy web | `app.py` | Builds `AnalysisConfig`, wires WebSocket callbacks, optional `AttackDirectionManager` |
+| Core function | `modules/match_analyzer.py` | `run_match_analysis(match_id, config, resume=True)` — video loop, state, callbacks |
+| Jobs / worker | `app_service/providers/analysis/local.py` | `LocalPipelineRunner` → same `run_match_analysis` |
 
 ### High-level flow
 
-```mermaid
-flowchart TB
-  subgraph ingest [Ingestion]
-    VS[video_sources.open_source]
-    RB[read_frame_batches]
-  end
-  subgraph orch [Orchestration]
-    MA[match_analyzer.run_match_analysis]
-    MS[(MatchState + storage.save)]
-  end
-  subgraph chunk [Per batch]
-    BP[batch_processor.BatchProcessor.process_chunk]
-    YOLO[YOLO predict batch]
-    RT[ReIDTracker.update]
-    TC[TeamClassifierV2]
-    PT[PossessionTrackerV2]
-    SP[Spatial + keypoints + homography + heatmaps]
-    AL[MatchAlertSystem]
-  end
-  subgraph persist [Persistence]
-    SO[save_chunk_output JSON under output_dir]
-    HM[export_spatial_heatmaps NPZ optional]
-  end
-  VS --> RB --> MA
-  MA --> BP
-  BP --> YOLO --> RT --> TC --> PT
-  TC --> SP
-  PT --> AL
-  BP --> SO
-  MA --> MS
-  SP --> HM
+```
+video_sources → read_frame_batches → match_analyzer (loop)
+                                          └─ BatchProcessor.process_chunk (per batch)
+                                                ├─ YOLO predict (batched)
+                                                ├─ ReIDTracker.update
+                                                ├─ TeamClassifierV2
+                                                ├─ PossessionTrackerV2
+                                                ├─ Spatial branch (keypoints → homography → heatmaps)
+                                                └─ MatchAlertSystem → alerts
 ```
 
-### 1) Video ingestion (`modules/video_sources.py`)
+### Inside each chunk (`modules/batch_processor.py`)
 
-- **`SourceType`**: uploaded file, YouTube VOD/live, Veo, HLS, RTMP, webcam
-- **`open_source(type, path_or_url)`** — returns a source with metadata (fps, resolution, duration or live flag) and a **frame generator** (BGR `numpy` frames)
-- **`read_frame_batches()`** — groups frames into chunks sized from **`AnalysisConfig.batch_size_seconds`** (or fixed frame count)
+Per-frame order inside `process_chunk`:
 
-### 2) Orchestration loop (`modules/match_analyzer.py`)
+1. **Parse YOLO boxes** — classes 0–3: player, ball, referee, goalkeeper
+2. **`ReIDTracker.update`** — stable track IDs across frames
+3. **`TeamClassifierV2`** — KMeans k=2 in CIELAB color space + temporal voting; referees/ball → team `-1`
+4. **Ball owner** — nearest player center within ~60 px radius
+5. **`PossessionTrackerV2.update`** — rolling possession + pass/recovery event detection
+6. **Spatial branch** (when `enable_spatial_tracking=True`):
+   - `FieldKeypointsYOLO` → `FieldCalibratorKeypoints` → homography via RANSAC
+   - Player feet projected to field coordinates
+   - `SpatialPossessionTracker` and `FieldHeatmapSystem` accumulation
+   - `OpticalFlowTracker` + `KalmanFilterPositionSmoother` (disabled by default — high cost)
+7. **`MatchAlertSystem.analyze_and_generate_alerts`** — event scores, optional LLM wording
 
-1. **State** — Create or **resume** `MatchState` via `config.storage` or **`get_default_storage()`** → `FileSystemStorage` under the directory **`match_states/`** (one `{match_id}.json` checkpoint per save)
-2. **Open video** — Attach fps/size to `MatchState.metadata`
-3. **BatchProcessor** — Constructed once per run; loads the YOLO weights from `config.model_path`
-4. **For each batch**  
-   - `processor.process_chunk(match_state, frames, start_frame_idx, fps, …)`  
-   - **`save_chunk_output()`** — writes per-batch JSON under **`config.output_dir`** (default **`outputs_streaming/{match_id}/`**: `detections_batch_*.json`, `positions_batch_*.json`, `events_batch_*.json`, `stats_batch_*.json`)  
-   - **`storage.save(match_id, match_state)`** — checkpoint for resume / summary APIs  
-   - Optional **`export_spatial_heatmaps`** to `{match_id}_heatmaps.npz` when spatial tracking is on  
-   - **`on_batch_complete` / `on_progress` / `on_frame_visualized`** — used by `app.py` to push WebSocket updates and annotated preview frames (`WS_ENABLE_PREVIEW_FRAMES`)
-5. **Finish** — `match_state.mark_completed()` and final heatmap export when enabled
+### Prediction layer
 
-### 3) Inside each chunk (`modules/batch_processor.py`)
-
-Rough **per-frame** order inside `process_chunk` (after a batched YOLO `predict` on the whole chunk for GPU efficiency):
-
-1. **Parse YOLO boxes** per frame (classes 0–3: player, ball, referee, goalkeeper)
-2. **`ReIDTracker.update`** — stable track IDs across frames (see `modules/reid_tracker.py`)
-3. **`TeamClassifierV2.add_detection` / `get_team`** — unsupervised team split from crop appearance (KMeans / voting); referees and ball get team `-1`
-4. **Ball owner** — nearest **player** center within a pixel radius (~60 px) to ball center
-5. **`PossessionTrackerV2.update`** — rolling possession team/player and accumulated frame counts → drives **pass** and **possession_change** **events** appended to the chunk list
-6. **Spatial branch** (when `enable_spatial_tracking` is true — default in `BatchProcessor.__init__` is `True`):  
-   - Periodic **`FieldKeypointsYOLO`** keypoints (`modules/field_keypoints_yolo.py`)  
-   - **`FieldCalibratorKeypoints`** accumulates keypoints and estimates homography (`field_calibrator_keypoints.py`, `field_model_keypoints.py`)  
-   - **`estimate_homography_with_flip_resolution`**, **`project_points`**, triangulation fallbacks from **`field_heatmap_system.py`**  
-   - Optional **`OpticalFlowTracker`** (default **off** — expensive) and **`KalmanFilterPositionSmoother`** / **`TrajectoryValidator`** for projected feet positions  
-   - **`SpatialPossessionTracker.update`** — zone model (`field_model.py` / `ZoneModel`) and legacy spatial state alongside heatmap accumulator bins  
-   - Ball projected to field when calibration is valid — feeds **prediction context** (ball x,y in metres)
-7. **`AttackDirectionManager`** (if injected) — period / direction hints from `modules/attack_direction_manager.py` and `config/` YAML consumed by alerts
-8. **`MatchAlertSystem.analyze_and_generate_alerts`** — builds structured stats + **`prediction_context`**, runs prediction engine / dispatcher / optional LLM formatting; attaches **`alerts`** into `chunk_stats` for the UI
-
-The chunk returns **`ChunkOutput`** (detections map, player positions list, events, stats, timing) plus the updated **`MatchState`**.
-
-### 4) Prediction and schemas
-
-- **`schemas/predictions.py`** — Pydantic models used by the prediction layer (distinct from the dataclass **`MatchState`** in `modules/match_state.py`, which is the runtime analysis state)
-- **`modules/match_state_builder.py`** — adapts live stats into the structure **`EventPredictionEngine`** expects
-- **`modules/prediction_metrics.py`** — features and scores fed into **`modules/event_prediction_engine.py`**
-- **`modules/prediction_config.py`** + **`config/predictions.yaml`** — thresholds, event types, sigmoid scale
-- **`modules/prediction_dispatcher.py`** — rate-limits / deduplicates emissions to the chat layer
-- **`modules/prediction_anthropic.py`** — optional natural-language phrasing when API keys are set
-
-### 5) Legacy web wiring (`app.py`)
-
-- HTTP routes for upload, remote URL ingest, heatmap PNG/NPZ endpoints, attack-direction overrides
-- **WebSocket** `/ws/{session_id}` streams batch summaries, alerts, and optionally annotated frames
-- Uses **`FileSystemStorage`**, **`HeatmapAccumulator`**, and helpers aligned with **`field_heatmap_system`** for server-side heatmap APIs
-
-### Module catalog (`modules/`)
-
-| Module | Responsibility |
-|--------|----------------|
-| **`match_analyzer.py`** | `run_match_analysis`, `AnalysisConfig`, batch loop, resume, shortcuts (`analyze_local_file`, `analyze_youtube`, …) |
-| **`batch_processor.py`** | `BatchProcessor`, `ChunkOutput`, `save_chunk_output`, spatial + alert integration |
-| **`video_sources.py`** | Multi-source frame iterators and batching helpers |
-| **`match_state.py`** | `MatchState`, sub-states (tracker, classifier, possession), `FileSystemStorage` / `RedisStorage` |
-| **`reid_tracker.py`** | Re-identification tracking on top of detections |
-| **`team_classifier_v2.py`** | Primary team classifier (KMeans + voting on jersey features) |
-| **`possession_tracker_v2.py`** | Primary possession + pass statistics |
-| **`match_alert_system.py`** | Tactical alerts + prediction hook-in |
-| **`field_keypoints_yolo.py`** | Pitch keypoint detector used for homography |
-| **`field_calibrator_keypoints.py`** / **`field_model_keypoints.py`** | Keypoint-based calibration pipeline |
-| **`field_model.py`** | Field dimensions and zone partition helpers |
-| **`field_heatmap_system.py`** | Homography resolution, projection helpers, `HeatmapAccumulator` |
-| **`spatial_possession_tracker.py`** | Zone / spatial possession accumulation |
-| **`optical_flow_tracker.py`** / **`position_smoother.py`** | Optional motion / smoothing path (flow disabled by default) |
-| **`attack_direction_manager.py`** | Attack direction / period logic shared with UI |
-| **`event_prediction_engine.py`** | Score-based event predictions |
-| **`prediction_metrics.py`** / **`prediction_dispatcher.py`** / **`prediction_config.py`** | Metrics, emit policy, YAML-backed config |
-| **`match_state_builder.py`** | Bridge live state → prediction `MatchState` model |
-| **`prediction_anthropic.py`** | Optional LLM copy for alerts |
-| **`tactical_analyzer.py`** | Deeper tactical strings when integrated |
-| **`team_classifier.py`**, **`team_classifier_v2_backup.py`**, **`possession_tracker.py`** | Older or backup variants — not the main web path |
-| **`field_calibration.py`**, **`field_line_detector.py`**, **`field_orientation.py`** | Alternate / supporting field geometry utilities |
+| File | Role |
+|------|------|
+| `config/predictions.yaml` | Event types, signal weights, thresholds, cooldowns |
+| `modules/event_prediction_engine.py` | Weighted signal sum → sigmoid → probability |
+| `modules/prediction_metrics.py` | Feature extraction from live state |
+| `modules/match_state_builder.py` | Adapts live stats → prediction model |
+| `modules/prediction_dispatcher.py` | Rate-limits / deduplicates alert emissions |
+| `modules/prediction_anthropic.py` | Optional Anthropic Claude wording (never decides, only phrases) |
 
 ---
 
-## Environment variables (reference)
+## Module catalog (`modules/`)
 
-Copy and adapt:
+| Module | Responsibility |
+|--------|----------------|
+| `match_analyzer.py` | `run_match_analysis`, `AnalysisConfig`, batch loop, resume |
+| `batch_processor.py` | `BatchProcessor`, `ChunkOutput`, spatial + alert integration |
+| `video_sources.py` | Multi-source frame iterators and batching |
+| `match_state.py` | `MatchState`, sub-states, `FileSystemStorage` / `RedisStorage` |
+| `reid_tracker.py` | Appearance-embedding tracking, Hungarian assignment |
+| `team_classifier_v2.py` | CIELAB KMeans + anti-green/dorsal mask + temporal voting |
+| `team_classifier.py` | Base classifier used by `reid_tracker` |
+| `possession_tracker_v2.py` | Deterministic possession + pass statistics |
+| `possession_tracker.py` | Base tracker used by `spatial_possession_tracker` |
+| `spatial_possession_tracker.py` | Zone-based possession accumulation |
+| `match_alert_system.py` | Tactical alerts + prediction hook |
+| `field_keypoints_yolo.py` | YOLO-based pitch keypoint detector |
+| `field_calibrator_keypoints.py` | Keypoint-based homography estimation |
+| `field_model_keypoints.py` | Field geometry for keypoint calibration |
+| `field_model.py` | Field dimensions and zone partition |
+| `field_heatmap_system.py` | Homography resolution, projection, `HeatmapAccumulator` |
+| `field_calibration.py` | Line-based calibration (used by spatial tracker) |
+| `field_line_detector.py` | Line detection for `field_calibration` |
+| `field_orientation.py` | Attack direction / orientation helpers |
+| `optical_flow_tracker.py` | Optional optical flow fallback (off by default) |
+| `position_smoother.py` | Kalman filter + trajectory validator for projected positions |
+| `attack_direction_manager.py` | Period and direction logic |
+| `event_prediction_engine.py` | Score-based event predictions |
+| `prediction_metrics.py` | Feature computation |
+| `prediction_dispatcher.py` | Emit rate-limiting |
+| `prediction_config.py` | YAML-backed config loading |
+| `match_state_builder.py` | Bridge live state → prediction model |
+| `prediction_anthropic.py` | Optional LLM natural-language phrasing |
+| `tactical_analyzer.py` | Extended tactical string analysis |
+| `match_alert_system.py` | Alert emission and deduplication |
+
+---
+
+## Environment variables
+
+Copy and adapt one of the example files:
 
 - `.env.example` — general template
 - `.env.local.example` — local compose (Postgres + Redis)
-- `.env.cloud.example` — Cloud Run / Cloud SQL / GCS / Pub/Sub hints
+- `.env.cloud.example` — Cloud Run / Cloud SQL / GCS / Pub/Sub
 
-Common keys: `APP_ENV`, `STORAGE_BACKEND`, `QUEUE_BACKEND`, `DATABASE_URL`, `LOCAL_STORAGE_PATH`, `GCP_*`, `GCS_*`, `PUBSUB_*`, `REDIS_URL`, `MODEL_PATH`, `PORT`, `LOG_LEVEL`, etc. (see `app_service/config.py`).
+Key variables (`app_service/config.py`):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MODEL_PATH` | `weights/best.pt` | YOLO detector weights |
+| `DATABASE_URL` | `sqlite:///./runtime_data/jobs.db` | SQLAlchemy connection string |
+| `STORAGE_BACKEND` | `filesystem` | `filesystem` \| `gcs` \| `redis` |
+| `QUEUE_BACKEND` | `local` | `local` \| `redis` \| `pubsub` |
+| `GCS_BUCKET` | — | GCS bucket name (if `STORAGE_BACKEND=gcs`) |
+| `ANTHROPIC_API_KEY` | — | Enables LLM narrative (optional) |
+| `BATCH_SIZE_SECONDS` | `3` | Micro-batch duration |
+| `YOLO_IMGSZ` | `640` | Inference image size |
+| `PORT` | `8000` | Server port |
 
 ---
 
@@ -227,12 +205,10 @@ Common keys: `APP_ENV`, `STORAGE_BACKEND`, `QUEUE_BACKEND`, `DATABASE_URL`, `LOC
 
 ```bash
 export DATABASE_URL=sqlite:///./runtime_data/jobs.db
-./scripts/db_manage.sh init-local   # dirs, optional sqlite wipe, alembic upgrade head
+./scripts/db_manage.sh init-local   # create dirs, optionally wipe DB, run alembic upgrade head
 ./scripts/db_manage.sh upgrade      # migrations only
-./scripts/db_manage.sh migrate "message"  # new autogenerated revision
+./scripts/db_manage.sh migrate "message"  # generate new autogenerated revision
 ```
-
-In normal operation the jobs schema is **not** created with `create_all`; ephemeral test helpers exist if you need them (`build_ephemeral_test_session_factory` in `app_service/providers/database/session.py`).
 
 ---
 
@@ -240,38 +216,51 @@ In normal operation the jobs schema is **not** created with `create_all`; epheme
 
 ```bash
 python worker/main.py
-# or ./scripts/run_worker_local.sh (Redis-oriented defaults in that script)
+# or
+./scripts/run_worker_local.sh
 ```
 
-The worker uses `LocalPipelineRunner` → `modules.match_analyzer.run_match_analysis` (same pipeline as local).
+The worker listens on the configured queue and calls `LocalPipelineRunner` → `modules.match_analyzer.run_match_analysis` — the same pipeline as local mode.
 
 ---
 
 ## Docker and Google Cloud
 
-- `Dockerfile.web` — API image (`uvicorn app_service.main:app`)
-- `Dockerfile.worker` — worker image
-- `docker-compose.local.yml` — web + worker + redis + postgres
-- `docker-compose.cloud.yml` — GPU-oriented worker hints
-- `cloudbuild.yaml` — build and deploy to Cloud Run (Artifact Registry)
-- Scripts: `scripts/create_gcp_resources.sh`, `scripts/deploy_web.sh`, `scripts/deploy_worker_vm.sh`
+| File | Purpose |
+|------|---------|
+| `Dockerfile.web` | API image (`uvicorn app_service.main:app`, no PyTorch) |
+| `Dockerfile.worker` | Worker image (PyTorch + CUDA + YOLO weights) |
+| `Dockerfile` | Legacy monolithic image for local demo |
+| `docker-compose.local.yml` | Local stack: web + worker + redis + postgres |
+| `docker-compose.cloud.yml` | Cloud-oriented compose hints |
+| `cloudbuild.yaml` | CI/CD: build + deploy web to Cloud Run |
+| `cloudbuild-worker.yaml` | Build + push worker image |
+| `cloudbuild-demo.yaml` | Demo deployment build |
 
-Detailed guides:
+Scripts in `scripts/`:
 
-- **[README_LOCAL.md](README_LOCAL.md)** — local dev, compose, E2E checks, CI
-- **[README_GCP.md](README_GCP.md)** — GCP resources, minimal deploy, Cloud SQL
+| Script | Purpose |
+|--------|---------|
+| `run_local.sh` | Start `app_service` locally |
+| `run_worker_local.sh` | Start worker locally |
+| `db_manage.sh` | Alembic helpers (init-local, upgrade, migrate) |
+| `deploy_web.sh` | Deploy web service to Cloud Run |
+| `deploy_worker_vm.sh` | Provision GPU VM and deploy worker |
+| `deploy_worker_cloudrun.sh` | Deploy worker as Cloud Run service (CPU/auto-scale) |
+| `deploy_demo.sh` | Deploy monolithic demo |
+| `create_gcp_resources.sh` | Create GCP buckets, Pub/Sub, Artifact Registry |
+
+Detailed cloud guide → [README_GCP.md](README_GCP.md)
 
 ---
 
 ## CI (GitHub Actions)
 
-On every **push** and **pull request** to `main`:
+On every **push** and **pull request** to `main`, `ci.yml` runs on **Python 3.11, 3.12, and 3.13**:
 
-1. `pip install -r requirements.txt` + test tooling
-2. DB init with Alembic (`./scripts/db_manage.sh init-local`)
-3. `pytest -q tests/test_dual_api_integration.py tests/test_worker_pipeline_real_call.py`
-
-Workflow file: `.github/workflows/ci.yml`
+1. Install `requirements.txt` + pytest tooling
+2. Init local SQLite DB with Alembic (`./scripts/db_manage.sh init-local`)
+3. `pytest -q tests/` — full test suite (88 tests)
 
 ---
 
@@ -282,85 +271,79 @@ pip install pytest pytest-asyncio httpx pytest-mock
 export DATABASE_URL=sqlite:///./runtime_data/jobs.db
 ./scripts/db_manage.sh init-local
 pytest -q
-# prediction / alerts only:
-pytest -q tests/test_prediction_engine.py tests/test_alerts.py
 ```
 
-Some tests patch heavy modules (`tests/conftest.py`) for fast legacy `app.py` checks; `app_service` tests use a real DB URL and migrations where applicable.
+Test files in `tests/`:
+
+| File | What it covers |
+|------|----------------|
+| `test_api.py` | HTTP endpoint status codes, response schemas, error handling |
+| `test_batch_processor.py` | Pipeline sequence with mocked YOLO detector |
+| `test_match_state.py` | Serialization/deserialization round-trips |
+| `test_possession_tracker.py` | Edge cases: no ball, equidistant players, possession change |
+| `test_worker_integration.py` | Full job flow with mocked detector and synthetic video |
+| `test_config_schema.py` | Config defaults, env var loading, invalid value rejection |
+| `test_optical_flow.py` | Optical flow and Kalman smoothing |
+| `test_alerts.py` | Alert generation and deduplication |
+| `test_prediction_engine.py` | Event scoring and thresholds |
+| `test_dual_api_integration.py` | Dual API integration |
+| `test_worker_pipeline_real_call.py` | Worker pipeline end-to-end |
 
 ---
 
-## CLI and legacy scripts
-
-- **`pruebatrackequipo.py`** — command-line processing (video + ReID, possession, etc.)
-- **`start_web.sh`** — web launcher if you use it in your setup
-- **`setup_check.py`** — environment sanity checks
-
----
-
-## Academic / thesis documentation
-
-- **[docs/TFG_TacticEYE2.md](docs/TFG_TacticEYE2.md)** — long-form project write-up (TFG)
-
----
-
-## Directory layout (overview)
+## Directory layout
 
 ```text
 .
 ├── app.py                    # Legacy FastAPI + WebSocket + streaming analysis
-├── app_service/              # Dual API: jobs, providers, config
-├── worker/                   # Queue consumer + pipeline
-├── modules/                  # Vision and analysis engine
-├── schemas/                  # Pydantic (e.g. predictions)
-├── config/                   # YAML (predictions, attack direction)
+├── app_service/              # Dual API: jobs, pluggable providers, config
+├── worker/                   # Queue consumer + pipeline runner
+├── modules/                  # Vision and analysis engine (31 modules)
+├── schemas/                  # Pydantic models (predictions)
+├── config/                   # YAML: predictions, attack_direction, soccernet
 ├── templates/                # index.html
 ├── static/                   # app.js, style.css
-├── tests/
-├── scripts/                  # run_local, db_manage, deploy, etc.
-├── alembic/                  # migrations
-├── docker-compose*.yml
-├── Dockerfile.web
-├── Dockerfile.worker
-├── Dockerfile                # legacy / generic image in repo
-├── cloudbuild.yaml
-├── requirements.txt          # unified deps (web, cloud, alembic)
-├── .github/workflows/
-├── docs/
-└── weights/                  # YOLO weights (avoid committing huge blobs)
+├── tests/                    # 88 automated tests
+├── scripts/                  # Shell helpers: run, db, deploy
+├── alembic/                  # DB migrations
+├── docker-compose.local.yml  # Local dev stack
+├── docker-compose.cloud.yml  # Cloud hints
+├── Dockerfile.web            # Web API image
+├── Dockerfile.worker         # Worker image (CUDA)
+├── Dockerfile                # Legacy monolithic image
+├── cloudbuild.yaml           # Cloud Build: web deploy
+├── cloudbuild-worker.yaml    # Cloud Build: worker image
+├── cloudbuild-demo.yaml      # Cloud Build: demo deploy
+├── requirements.txt          # Unified dependencies
+├── requirements-web.txt      # Web-only dependencies (no PyTorch)
+├── .github/workflows/        # CI (ci.yml) + CD (cd.yml)
+├── weights/                  # YOLO model weights (.pt)
+└── runtime_data/             # SQLite DB and local job workspace (gitignored)
 ```
 
 ---
 
 ## Requirements
 
-- **Python:** 3.10+ (CI uses 3.11)
-- **Hardware:** NVIDIA GPU recommended for reasonable full-match throughput; CPU works but is slower
-- **Weights:** place `weights/best.pt` (or set `MODEL_PATH`)
+- **Python:** 3.11+ (CI tests 3.11, 3.12, 3.13)
+- **GPU:** NVIDIA CUDA-capable GPU recommended; CPU fallback available but ~15–20× slower
+- **Weights:** `weights/best.pt` (detector) must be present; set `MODEL_PATH` to override
 
 ---
 
 ## Quick troubleshooting
 
-| Issue | Hint |
-|-------|------|
-| `table jobs already exists` with Alembic | Do not mix ad-hoc `create_all` with Alembic on the same DB; use `./scripts/db_manage.sh init-local` |
-| Cloud Run UI without live stats | On `run.app`, `jobs` mode does not use WebSocket; extend polling or wire streaming endpoints |
-| Dependencies | This branch uses **`requirements.txt` only** (no `requirements_web.txt`) |
+| Issue | Fix |
+|-------|-----|
+| `table jobs already exists` with Alembic | Use `./scripts/db_manage.sh init-local` — do not mix ad-hoc `create_all` with Alembic on the same DB |
+| Cloud Run UI without live stats | On `run.app`, `jobs` mode polls instead of streaming; extend polling or wire SSE |
+| Model not found | Set `MODEL_PATH=weights/best.pt` in your `.env` |
+| CUDA not detected | Pipeline falls back to CPU automatically; set `device=cpu` explicitly if needed |
 
 ---
 
-## License and acknowledgements
+## License
 
-- License: **MIT** — see `LICENSE`
-- Detection: [Ultralytics YOLO](https://github.com/ultralytics/ultralytics)
-- ReID / references: see historical notes and `docs/TFG_TacticEYE2.md`
+MIT — see [LICENSE](LICENSE)
 
----
-
-## Contributing
-
-1. Fork → feature branch → changes with tests and green CI  
-2. Pull request to `main`
-
-If you change the DB schema, add an Alembic revision and document new variables in `.env.example`.
+Detection: [Ultralytics YOLO](https://github.com/ultralytics/ultralytics) · Framework: [FastAPI](https://fastapi.tiangolo.com/) · Cloud: [Google Cloud Platform](https://cloud.google.com/)
