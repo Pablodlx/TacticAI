@@ -10,10 +10,15 @@ from modules.video_sources import SourceType
 class LocalPipelineRunner(AnalysisRunner):
     def __init__(self, settings: Settings):
         self.settings = settings
-        from ultralytics import YOLO
-        print(f"Pre-cargando modelo YOLO desde {settings.model_path}...")
-        self._cached_model = YOLO(settings.model_path)
-        print("Modelo YOLO listo.")
+        self._cached_model = None  # lazy: se carga al primer run()
+
+    def _load_model(self):
+        if self._cached_model is None:
+            from ultralytics import YOLO
+            print(f"Cargando modelo YOLO desde {self.settings.model_path}...")
+            self._cached_model = YOLO(self.settings.model_path)
+            print("Modelo YOLO listo.")
+        return self._cached_model
 
     def run(
         self,
@@ -39,7 +44,7 @@ class LocalPipelineRunner(AnalysisRunner):
             batch_size_seconds=self.settings.batch_size_seconds,
             output_dir=output_dir,
             model_path=self.settings.model_path,
-            preloaded_model=self._cached_model,
+            preloaded_model=self._load_model(),
             conf_threshold=self.settings.conf_threshold,
             device=device,
             imgsz=imgsz,

@@ -1,8 +1,19 @@
 """Fixtures compartidos para los tests de TacticEYE2."""
+import sys
 import io
 import pytest
 from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
+
+
+def pytest_configure(config):
+    """Mocka módulos opcionales que pueden no estar instalados en CI."""
+    import importlib
+    for mod in ("lap",):  # dependencia opcional de seguimiento
+        try:
+            importlib.import_module(mod)
+        except ModuleNotFoundError:
+            sys.modules[mod] = MagicMock()
 
 
 @pytest.fixture(scope="session")
