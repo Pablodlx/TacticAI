@@ -4,6 +4,8 @@
 .venv
 venv
 env
+.env
+.env.*
 __pycache__
 *.py[cod]
 *.log
@@ -30,6 +32,7 @@ tests/
 *.md
 *.txt
 !requirements.txt
+!requirements-web.txt
 
 # IDE y OS
 .vscode/

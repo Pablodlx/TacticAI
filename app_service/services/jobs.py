@@ -36,7 +36,7 @@ class JobService:
         db_session_factory,
         storage: StorageProvider,
         queue: QueueProvider,
-        analysis_runner: AnalysisRunner,
+        analysis_runner: AnalysisRunner | None,
         local_workspace: str,
     ):
         self.db_session_factory = db_session_factory

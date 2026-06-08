@@ -1,5 +1,4 @@
 from app_service.config import Settings
-from app_service.providers.analysis.local import LocalPipelineRunner
 from app_service.providers.database.session import build_session_factory
 from app_service.providers.queue.base import QueueProvider
 from app_service.providers.queue.sync import SyncQueueProvider
@@ -25,6 +24,7 @@ def build_queue(settings: Settings) -> QueueProvider:
 
 
 def build_analysis_runner(settings: Settings):
+    from app_service.providers.analysis.local import LocalPipelineRunner
     return LocalPipelineRunner(settings)
 
 

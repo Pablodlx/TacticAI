@@ -1,7 +1,6 @@
 substitutions:
   _REGION: europe-west1
   _REPO: tacticeye
-  _SERVICE: tacticeye2-web
 
 steps:
   - name: gcr.io/cloud-builders/docker
@@ -16,17 +15,3 @@ steps:
     args:
       - push
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/web:latest
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: gcloud
-    args:
-      - run
-      - deploy
-      - ${_SERVICE}
-      - --image
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/web:latest
-      - --region
-      - ${_REGION}
-      - --platform
-      - managed
-      - --no-allow-unauthenticated
-

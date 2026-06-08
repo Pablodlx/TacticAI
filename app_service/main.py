@@ -26,7 +26,9 @@ def create_app() -> FastAPI:
     storage = build_storage(settings)
     queue = build_queue(settings)
     session_factory = build_session(settings)
-    analysis_runner = build_analysis_runner(settings)
+    # Only the sync backend runs analysis inside the web process;
+    # other backends (pubsub, redis) offload to the worker service.
+    analysis_runner = build_analysis_runner(settings) if settings.queue_backend == "sync" else None
 
     service = JobService(
         db_session_factory=session_factory,
