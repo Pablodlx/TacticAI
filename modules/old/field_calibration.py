@@ -18,7 +18,7 @@ from typing import Optional, List, Tuple, Dict
 from dataclasses import dataclass
 from collections import deque
 
-from .field_model import FieldModel
+from modules.field_model import FieldModel
 from .field_line_detector import FieldLineDetector, KeypointMatcher
 
 

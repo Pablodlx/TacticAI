@@ -12,8 +12,8 @@ import numpy as np
 from typing import Optional, Dict, List, Tuple, Any
 from collections import defaultdict
 
-from .possession_tracker import PossessionTracker
-from .field_calibration import FieldCalibrator
+from .old.possession_tracker import PossessionTracker
+from .old.field_calibration import FieldCalibrator
 from .field_model import FieldModel, ZoneModel
 
 

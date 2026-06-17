@@ -13,7 +13,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
 import time
-from modules.team_classifier import TeamClassifier
+from modules.old.team_classifier import TeamClassifier
 
 
 @dataclass

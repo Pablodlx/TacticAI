@@ -11,7 +11,7 @@ Estrategia:
 5. Acumular features por track (no por frame) con throttling para reducir coste.
 6. KMeans k=2 sobre features agregados de diferentes tracks.
 7. Votación temporal para estabilidad.
-8. Detección de árbitros por class_id y color.
+8. Detección de árbitros por class_id YOLO (class_id == 2).
 
 Mejoras anti-dorsal:
 - Usa Laplacian/Sobel para detectar bordes fuertes (números/texto).
@@ -38,7 +38,7 @@ class TeamClassifierV2:
     - Features LAB (a*, b*) robustos a iluminación
     - Clustering por track (no por frame) para evitar sobrerrepresentación
     - Throttling: actualiza color cada N frames para reducir coste computacional
-    - Detección de árbitros por class_id y color
+    - Detección de árbitros exclusivamente por class_id YOLO (evita falsos positivos con equipos amarillos)
     - Votación temporal para estabilidad
     - Modo debug con visualización de ROIs y máscaras
     """
@@ -86,14 +86,6 @@ class TeamClassifierV2:
         # Voting and confirmation
         vote_history: int = 5,
         
-        # Referee detection
-        referee_detection: bool = True,
-        referee_black_L_max: int = 80,
-        referee_black_chroma_max: float = 30.0,
-        referee_yellow_h_min: int = 20,
-        referee_yellow_h_max: int = 60,
-        referee_yellow_s_min: int = 150,
-        
         # Debug mode
         save_debug_rois: bool = False,
         debug_rois_dir: str = "debug_rois_v2pro"
@@ -127,12 +119,6 @@ class TeamClassifierV2:
             kmeans_min_tracks: Mínimo de tracks diferentes para inicializar KMeans
             kmeans_min_samples_per_track: Mínimo de muestras por track para considerarlo
             vote_history: Tamaño del buffer de votación temporal
-            referee_detection: Activar detección de árbitros por color
-            referee_black_L_max: L máximo para detectar negro de árbitro
-            referee_black_chroma_max: Chroma máximo para negro de árbitro
-            referee_yellow_h_min: H mínimo para amarillo de árbitro
-            referee_yellow_h_max: H máximo para amarillo de árbitro
-            referee_yellow_s_min: S mínimo para amarillo de árbitro
             save_debug_rois: Guardar ROIs y máscaras para debug
             debug_rois_dir: Directorio para guardar ROIs de debug
         """
@@ -176,14 +162,6 @@ class TeamClassifierV2:
         
         # Voting
         self.vote_history = vote_history
-        
-        # Referee detection
-        self.referee_detection = referee_detection
-        self.referee_black_L_max = referee_black_L_max
-        self.referee_black_chroma_max = referee_black_chroma_max
-        self.referee_yellow_h_min = referee_yellow_h_min
-        self.referee_yellow_h_max = referee_yellow_h_max
-        self.referee_yellow_s_min = referee_yellow_s_min
         
         # Debug
         self.save_debug_rois = save_debug_rois
@@ -392,42 +370,6 @@ class TeamClassifierV2:
         
         return feature
     
-    def _is_referee_by_color(self, roi_bgr: np.ndarray) -> bool:
-        """
-        Detecta si el ROI corresponde a un árbitro por color (negro o amarillo).
-        
-        Args:
-            roi_bgr: ROI en BGR
-            
-        Returns:
-            True si parece árbitro
-        """
-        if not self.referee_detection:
-            return False
-        
-        # Convert to LAB for black detection
-        roi_lab = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2LAB)
-        L_median = np.median(roi_lab[:, :, 0])
-        a_median = np.median(roi_lab[:, :, 1])
-        b_median = np.median(roi_lab[:, :, 2])
-        chroma = np.sqrt((a_median - 128)**2 + (b_median - 128)**2)
-        
-        # Black referee: low L, low chroma
-        if L_median < self.referee_black_L_max and chroma < self.referee_black_chroma_max:
-            return True
-        
-        # Yellow referee: convert to HSV
-        roi_hsv = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
-        H_median = np.median(roi_hsv[:, :, 0])
-        S_median = np.median(roi_hsv[:, :, 1])
-        
-        # Yellow: H in [20, 60], high S
-        if (self.referee_yellow_h_min <= H_median <= self.referee_yellow_h_max and
-            S_median >= self.referee_yellow_s_min):
-            return True
-        
-        return False
-    
     def _save_debug_roi(self, track_id: int, roi_bgr: np.ndarray, 
                         mask_non_green: np.ndarray, mask_edges: np.ndarray,
                         mask_cloth: np.ndarray, used_mask: np.ndarray,
@@ -607,11 +549,6 @@ class TeamClassifierV2:
         roi_bgr = self._extract_torso_roi(image, bbox)
         if roi_bgr is None:
             # Skip: bbox too small or ROI too small (distant player)
-            return
-        
-        # Check referee by color
-        if self._is_referee_by_color(roi_bgr):
-            self.track_team[track_id] = -1
             return
         
         # Build cloth mask (anti-green + anti-text/edges)
