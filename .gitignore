@@ -38,6 +38,11 @@ ENV/
 env/
 .venv
 
+# Environment / secrets — nunca versionar valores reales
+.env
+.env.local
+.env.cloud
+
 # IDEs
 .vscode/
 .idea/
