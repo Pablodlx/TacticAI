@@ -11,7 +11,7 @@ gcloud config set project "${PROJECT_ID}"
 
 # Build and push worker image via Cloud Build
 gcloud builds submit \
-  --config cloudbuild-worker.yaml \
+  --config deploy/cloudbuild-worker.yaml \
   --substitutions "_REGION=${REGION},_REPO=${REPO}" \
   .
 

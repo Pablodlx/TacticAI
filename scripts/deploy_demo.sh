@@ -34,7 +34,7 @@ gcloud artifacts repositories create "${REPO}" \
 # 3. Build + push + deploy vía Cloud Build
 echo "==> Lanzando Cloud Build (build + deploy)..."
 gcloud builds submit \
-  --config cloudbuild-demo.yaml \
+  --config deploy/cloudbuild-demo.yaml \
   --substitutions "_REGION=${REGION},_REPO=${REPO},_SERVICE=${SERVICE}" \
   .
 
