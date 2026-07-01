@@ -64,7 +64,6 @@ def mocked_processor():
             return_value=None,
         ),
         patch("modules.batch_processor.OpticalFlowTracker"),
-        patch("modules.batch_processor.KalmanFilterPositionSmoother"),
         patch("modules.batch_processor.MatchAlertSystem"),
     ]
     started = [p.start() for p in patches]
@@ -105,7 +104,6 @@ class TestBatchProcessorInit:
             patch("modules.batch_processor.HeatmapAccumulator"),
             patch("modules.batch_processor.estimate_homography_with_flip_resolution", return_value=None),
             patch("modules.batch_processor.OpticalFlowTracker"),
-            patch("modules.batch_processor.KalmanFilterPositionSmoother"),
             patch("modules.batch_processor.MatchAlertSystem"),
         ]
         for p in patches:

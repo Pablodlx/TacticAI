@@ -39,9 +39,8 @@ from modules.field_heatmap_system import (
     project_points_with_fallback
 )
 
-# Optical flow y position smoothing (NEW)
+# Optical flow (NEW)
 from modules.optical_flow_tracker import OpticalFlowTracker, CameraMotionDetector
-from modules.position_smoother import KalmanFilterPositionSmoother, TrajectoryValidator
 
 # Jerarquía de prioridad de keypoints (mayor = más fiable)
 # Basada en las 15 clases del modelo field_kp_merged_fast
@@ -207,9 +206,8 @@ class BatchProcessor:
         self.field_calibrator: Optional[FieldCalibrator] = None
         self.spatial_tracker: Optional[SpatialPossessionTracker] = None
 
-        # Módulos de optical flow y smoothing (NEW)
+        # Módulo de optical flow (NEW)
         self.optical_flow_tracker: Optional['OpticalFlowTracker'] = None
-        self.position_smoother: Optional['KalmanFilterPositionSmoother'] = None
 
         # Sistema de alertas tácticas
         self.alert_system: Optional[MatchAlertSystem] = None
@@ -329,7 +327,7 @@ class BatchProcessor:
                 heatmap_resolution=self.spatial_params['heatmap_resolution']
             )
 
-            # NEW: Inicializar optical flow tracker y position smoother
+            # NEW: Inicializar optical flow tracker
             fps = getattr(match_state, 'fps', 30.0) or 30.0
 
             # Optical Flow: DESHABILITADO por defecto (consume 390ms/frame)
@@ -343,12 +341,6 @@ class BatchProcessor:
                 self.camera_motion_detector = None
                 print(f"  - Optical Flow Tracker: ✗ Desactivado (para rendimiento)")
 
-            # Kalman smoothing: Siempre habilitado (es muy rápido)
-            self.position_smoother = KalmanFilterPositionSmoother()
-            self.trajectory_validator = TrajectoryValidator(fps=fps)
-
-            print(f"  - Position Smoother (Kalman Filter): ✓ Activado")
-            print(f"  - Trajectory Validator: ✓ Activado")
             print(f"  - Modelo de zonas: {self.spatial_params['zone_partition_type']}")
             print(f"  - Número de zonas: {zone_model.num_zones}")
             print(f"  - Heatmaps: {'Activados' if self.spatial_params['enable_heatmaps'] else 'Desactivados'}")
@@ -851,10 +843,8 @@ class BatchProcessor:
                                     try:
                                         proj = project_points(H, np.array([[foot_x, foot_y]], dtype=np.float32))[0]
                                         if not np.isnan(proj).any() and 0 <= proj[0] <= FIELD_LENGTH and 0 <= proj[1] <= FIELD_WIDTH:
-                                            is_valid, _ = self.trajectory_validator.validate(track_id, proj, frame_idx)
-                                            if is_valid:
-                                                field_pos = proj
-                                                confidence = 1.0
+                                            field_pos = proj
+                                            confidence = 1.0
                                     except Exception:
                                         pass
 
@@ -865,10 +855,8 @@ class BatchProcessor:
                                             np.array([[foot_x, foot_y]], dtype=np.float32)
                                         )[0]
                                         if not np.isnan(proj).any() and 0 <= proj[0] <= FIELD_LENGTH and 0 <= proj[1] <= FIELD_WIDTH:
-                                            is_valid, _ = self.trajectory_validator.validate(track_id, proj, frame_idx)
-                                            if is_valid:
-                                                field_pos = proj
-                                                confidence = 0.85
+                                            field_pos = proj
+                                            confidence = 0.85
                                     except Exception:
                                         pass
 
@@ -888,10 +876,8 @@ class BatchProcessor:
                                     if tri_coords is not None and len(tri_coords) > 0:
                                         proj = tri_coords[0]
                                         if not np.isnan(proj).any() and 0 <= proj[0] <= FIELD_LENGTH and 0 <= proj[1] <= FIELD_WIDTH:
-                                            is_valid, _ = self.trajectory_validator.validate(track_id, proj, frame_idx)
-                                            if is_valid:
-                                                field_pos = proj
-                                                confidence = 0.55
+                                            field_pos = proj
+                                            confidence = 0.55
 
                                 if field_pos is None and track_id in of_fallback:
                                     of_pos_px = of_fallback[track_id]
@@ -902,12 +888,7 @@ class BatchProcessor:
                                     ])
                                     confidence = of_confidence * 0.4
 
-                                # Aplicar Kalman smoothing si tenemos posición
                                 if self._is_valid_for_heatmap(field_pos):
-                                    field_pos = self.position_smoother.smooth(
-                                        track_id, field_pos, confidence, is_detected=True
-                                    )
-
                                     # Acumular presencia zonal por equipo para top-zonas UI.
                                     # Esto corrige sesgos del tracker espacial legacy y usa datos proyectados por jugador.
                                     if team_id in (0, 1):

@@ -192,7 +192,6 @@ fuentes_vídeo → read_frame_batches → match_analyzer (bucle)
 | `field_line_detector.py` | Detección de líneas para `field_calibration` |
 | `field_orientation.py` | Dirección de ataque y orientación del campo |
 | `optical_flow_tracker.py` | Flujo óptico como fallback posicional (deshabilitado por defecto) |
-| `position_smoother.py` | Filtro de Kalman + validador de trayectorias para posiciones proyectadas |
 | `attack_direction_manager.py` | Lógica de periodos y dirección de ataque |
 | `event_prediction_engine.py` | Predicción de eventos por puntuación |
 | `prediction_metrics.py` | Cálculo de features |
@@ -415,7 +414,7 @@ pytest -q
 | `test_possession_tracker.py` | Casos límite: sin balón, jugadores equidistantes, cambio de posesión |
 | `test_worker_integration.py` | Flujo completo de trabajo con detector mockeado y vídeo sintético |
 | `test_config_schema.py` | Valores por defecto de config, carga de variables de entorno, rechazo de valores inválidos |
-| `test_optical_flow.py` | Flujo óptico y suavizado Kalman |
+| `test_optical_flow.py` | Flujo óptico y detección de movimiento de cámara |
 | `test_alerts.py` | Generación y deduplicación de alertas |
 | `test_prediction_engine.py` | Puntuación de eventos y umbrales |
 | `test_dual_api_integration.py` | Integración de la API dual |

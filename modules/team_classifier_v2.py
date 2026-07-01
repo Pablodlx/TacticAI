@@ -18,7 +18,7 @@ Mejoras anti-dorsal:
 - Dilata máscara de bordes para eliminar completamente los dorsales.
 - Funciona independiente del color del dorsal (azul/amarillo/blanco).
 
-Author: TacticEYE2 Team
+
 """
 
 import cv2
