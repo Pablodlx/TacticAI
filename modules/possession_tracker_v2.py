@@ -15,8 +15,7 @@ API:
     timeline = tracker.get_possession_timeline()
     current = tracker.get_current_possession()
 
-Author: TacticEYE2 Team
-Date: 2026-01-21
+
 """
 
 from typing import Optional, Dict, List, Tuple

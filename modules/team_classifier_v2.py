@@ -274,8 +274,8 @@ class TeamClassifierV2:
         
         # Light morphology to clean up noise
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        mask_non_green = cv2.morphologyEx(mask_non_green, cv2.MORPH_OPEN, kernel)
-        mask_non_green = cv2.morphologyEx(mask_non_green, cv2.MORPH_CLOSE, kernel)
+        mask_non_green = cv2.morphologyEx(mask_non_green, cv2.MORPH_OPEN, kernel)  # quita puntos sueltos
+        mask_non_green = cv2.morphologyEx(mask_non_green, cv2.MORPH_CLOSE, kernel)  #rellena huecos pequeños
         
         # Calculate ratio
         total_pixels = mask_non_green.size

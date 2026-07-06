@@ -6,8 +6,7 @@ Sistema completo para generar heatmaps de posición de jugadores proyectados
 a coordenadas de campo, resolviendo la ambigüedad de flip horizontal cuando
 los keypoints detectados no distinguen izquierda/derecha.
 
-Autor: TacticEYE2
-Fecha: 2026-01-29
+
 """
 
 import numpy as np

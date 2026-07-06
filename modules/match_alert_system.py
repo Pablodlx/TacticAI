@@ -7,8 +7,7 @@ sobre patrones tácticos, posesión, pases, y anomalías del juego.
 
 Versión mejorada con análisis táctico profesional usando Claude API.
 
-Author: TacticEYE2 Team
-Date: 2026-04-14
+
 """
 
 from typing import Any, List, Dict, Optional, Tuple

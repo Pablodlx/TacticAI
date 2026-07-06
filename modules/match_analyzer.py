@@ -50,7 +50,7 @@ class AnalysisConfig:
     use_L_channel: bool = True
     L_weight: float = 0.5
     
-    # Spatial Tracking (NUEVO)
+    # Spatial Tracking 
     enable_spatial_tracking: bool = False
     zone_partition_type: str = 'thirds_lanes'
     zone_nx: int = 6
@@ -166,7 +166,7 @@ def run_match_analysis(
                 vote_history=config.vote_history,
                 use_L=config.use_L_channel,
                 L_weight=config.L_weight,
-                # Parámetros espaciales (NUEVO)
+                # Parámetros espaciales 
                 enable_spatial_tracking=config.enable_spatial_tracking,
                 zone_partition_type=config.zone_partition_type,
                 zone_nx=config.zone_nx,

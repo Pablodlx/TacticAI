@@ -8,8 +8,7 @@ Generates sophisticated tactical analysis beyond basic statistics:
 - Tactical narrative using Claude API
 - Professional-grade commentary for match events
 
-Author: TacticEYE2 Team
-Date: 2026-04-14
+
 """
 
 import os

@@ -7,8 +7,7 @@ Provides frame-to-frame optical flow tracking to:
 2. Validate camera motion consistency
 3. Smooth player trajectories across frames
 
-Author: TacticEYE2
-Date: 2026-04-14
+
 """
 
 import numpy as np
