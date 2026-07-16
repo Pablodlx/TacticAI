@@ -1,7 +1,19 @@
+import contextlib
 import os
 import shutil
 
 from app_service.providers.storage.base import StorageProvider
+
+
+class _LocalWriter:
+    """Wrapper de un file handle que además expone `.uri` tras escribir."""
+
+    def __init__(self, fileobj, uri: str):
+        self._fileobj = fileobj
+        self.uri = uri
+
+    def write(self, chunk: bytes) -> None:
+        self._fileobj.write(chunk)
 
 
 class LocalStorageProvider(StorageProvider):
@@ -42,4 +54,11 @@ class LocalStorageProvider(StorageProvider):
 
     def upload_text(self, text: str, destination_name: str) -> str:
         return self.upload_bytes(text.encode("utf-8"), destination_name)
+
+    @contextlib.contextmanager
+    def open_writer(self, destination_name: str):
+        path = self._resolve(destination_name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            yield _LocalWriter(f, f"file://{path}")
 

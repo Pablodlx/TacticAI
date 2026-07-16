@@ -25,6 +25,22 @@ class Settings(BaseSettings):
     database_url: str = Field(default="sqlite:///./runtime_data/jobs.db", alias="DATABASE_URL")
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
 
+    # Auth
+    jwt_secret: str = Field(default="dev-secret-change-me", alias="JWT_SECRET")
+    access_token_ttl_min: int = Field(default=15, alias="ACCESS_TOKEN_TTL_MIN")
+    refresh_token_ttl_days: int = Field(default=30, alias="REFRESH_TOKEN_TTL_DAYS")
+    cors_origins: str = Field(default="http://localhost:3000", alias="CORS_ORIGINS")
+
+    # Stripe / planes
+    stripe_secret_key: str = Field(default="", alias="STRIPE_SECRET_KEY")
+    stripe_webhook_secret: str = Field(default="", alias="STRIPE_WEBHOOK_SECRET")
+    stripe_price_starter: str = Field(default="", alias="STRIPE_PRICE_STARTER")
+    stripe_price_pro: str = Field(default="", alias="STRIPE_PRICE_PRO")
+    frontend_url: str = Field(default="http://localhost:3000", alias="FRONTEND_URL")
+
+    # Heatmaps temporales
+    heatmap_window_minutes: int = Field(default=5, alias="HEATMAP_WINDOW_MINUTES")
+
     model_path: str = Field(default="weights/best.pt", alias="MODEL_PATH")
     conf_threshold: float = Field(default=0.3, alias="CONF_THRESHOLD")
     batch_size_seconds: float = Field(default=3.0, alias="BATCH_SIZE_SECONDS")

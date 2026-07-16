@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 15
+names: ['bigarea_bottom_inner', 'bigarea_bottom_outter', 'bigarea_top_inner', 'bigarea_top_outter', 'bottom_arc_area_intersection', 'corner', 'halfcircle_bottom', 'halfcircle_top', 'midline_bottom_intersection', 'midline_top_intersection', 'smallarea_bottom_inner', 'smallarea_bottom_outter', 'smallarea_top_inner', 'smallarea_top_outter', 'top_arc_area_intersection']
+
+roboflow:
+  workspace: homografia
+  project: keypoints-propio
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/homografia/keypoints-propio/dataset/1

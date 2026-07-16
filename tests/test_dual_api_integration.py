@@ -1,5 +1,6 @@
 import os
 import subprocess
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -26,11 +27,22 @@ def _migrate_test_db(tmp_path: Path):
     subprocess.run(["./scripts/db_manage.sh", "upgrade"], check=True, env=env)
 
 
+def _auth_headers(client) -> dict:
+    """Registra un usuario de test y devuelve headers con su access token."""
+    r = client.post(
+        "/auth/register",
+        json={"email": "it@test.com", "password": "password123"},
+    )
+    assert r.status_code == 201, r.text
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
 def test_post_health(tmp_path):
     _setup_env(tmp_path)
     _migrate_test_db(tmp_path)
     app = create_app()
     client = TestClient(app)
+    headers = _auth_headers(client)
     resp = client.post("/health")
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
@@ -41,6 +53,7 @@ def test_jobs_sync_and_status_transitions(tmp_path, monkeypatch):
     _migrate_test_db(tmp_path)
     app = create_app()
     client = TestClient(app)
+    headers = _auth_headers(client)
 
     observed = []
     orig = JobService.process_payload
@@ -58,7 +71,8 @@ def test_jobs_sync_and_status_transitions(tmp_path, monkeypatch):
     monkeypatch.setattr(JobService, "process_payload", wrapped, raising=True)
 
     video = b"\x00\x00\x00\x1cftypisom\x00\x00\x00\x00isomavc1" + b"\x00" * 128
-    upload = client.post("/jobs/upload", files={"file": ("sample.mp4", video, "video/mp4")})
+    upload = client.post(
+"/jobs/upload", headers=headers, files={"file": ("sample.mp4", video, "video/mp4")})
     assert upload.status_code == 200
     input_uri = upload.json()["input_uri"]
 
@@ -71,15 +85,22 @@ def test_jobs_sync_and_status_transitions(tmp_path, monkeypatch):
         raising=True,
     )
 
-    create = client.post("/jobs", json={"input_uri": input_uri})
+    create = client.post("/jobs", headers=headers, json={"input_uri": input_uri})
     assert create.status_code == 200
     job_id = create.json()["job_id"]
 
-    status = client.get(f"/jobs/{job_id}")
-    assert status.status_code == 200
-    payload = status.json()
-    assert payload["status"] == "completed"
-    # En modo sync el estado intermedio puede no observarse en un poll externo, validamos ciclo completo por timestamps.
+    # El análisis corre en un hilo aparte (create_job responde al instante
+    # para no bloquear al cliente/proxy durante minutos) — se espera a que
+    # termine con un poll corto, igual que haría el frontend real.
+    payload = None
+    for _ in range(50):
+        status = client.get(f"/jobs/{job_id}", headers=headers)
+        assert status.status_code == 200
+        payload = status.json()
+        if payload["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.1)
+    assert payload["status"] == "completed", payload
     assert observed[0] == "pending"
     assert observed[-1] == "completed"
     assert payload["started_at"] is not None

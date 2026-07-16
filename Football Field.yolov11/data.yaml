@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 16
+names: ['1', '10', '11', '12', '13', '14', '15', '16', '2', '3', '4', '5', '7', '8', '9', 'c']
+
+roboflow:
+  workspace: homografia
+  project: football-field-mdvk6-jii18
+  version: dataset
+  license: Public Domain
+  url: https://universe.roboflow.com/homografia/football-field-mdvk6-jii18/dataset/dataset

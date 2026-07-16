@@ -41,6 +41,8 @@ from modules.field_heatmap_system import (
 
 # Optical flow (NEW)
 from modules.optical_flow_tracker import OpticalFlowTracker, CameraMotionDetector
+from modules.position_smoother import KalmanFilterPositionSmoother, TrajectoryValidator
+from modules.ball_tracker import BallTracker
 
 # Jerarquía de prioridad de keypoints (mayor = más fiable)
 # Basada en las 15 clases del modelo field_kp_merged_fast
@@ -125,8 +127,21 @@ class BatchProcessor:
         preloaded_model=None,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         conf_threshold: float = 0.3,
+        # El balón usa un umbral más bajo: es pequeño y YOLO le asigna poca
+        # confianza (sobre todo en vídeo amateur). El BallTracker filtra los
+        # falsos positivos que esto introduce.
+        ball_conf_threshold: float = 0.12,
         iou_threshold: float = 0.45,
         imgsz: int = 640,
+        # Detector dedicado de balón (opcional): modelo de 1 clase entrenado a
+        # mayor resolución (scripts/train_ball_detector.py). Aporta candidatos
+        # adicionales al BallTracker; el pipeline funciona igual sin él.
+        ball_model_path: Optional[str] = "weights/ball_detector.pt",
+        ball_imgsz: int = 1280,
+        # Ejecutar el detector dedicado 1 de cada N frames: el BallTracker
+        # cubre los intermedios con candidatos del modelo principal y
+        # predicción de Kalman. stride=2 ≈ mitad de coste, pérdida mínima.
+        ball_frame_stride: int = 2,
         # Parámetros del tracker
         max_age: int = 30,
         max_lost_time: float = 120.0,
@@ -162,6 +177,7 @@ class BatchProcessor:
         
         self.device = device
         self.conf_threshold = conf_threshold
+        self.ball_conf_threshold = min(ball_conf_threshold, conf_threshold)
         self.iou_threshold = iou_threshold
         self.imgsz = imgsz
         
@@ -172,6 +188,22 @@ class BatchProcessor:
             print(f"Cargando modelo YOLO desde {model_path}...")
             self.model = YOLO(model_path)
         self.model.to(device)
+
+        # Detector dedicado de balón (opcional, 1 clase, alta resolución)
+        self.ball_model = None
+        self.ball_imgsz = ball_imgsz
+        self.ball_frame_stride = max(1, ball_frame_stride)
+        if ball_model_path:
+            import os
+            if os.path.exists(ball_model_path):
+                try:
+                    self.ball_model = YOLO(ball_model_path)
+                    self.ball_model.to(device)
+                    print(f"✓ Detector dedicado de balón cargado: {ball_model_path} (imgsz={ball_imgsz})")
+                except Exception as e:
+                    print(f"⚠ No se pudo cargar el detector de balón ({e}); se usa solo el modelo principal")
+            else:
+                print(f"ℹ Detector de balón no encontrado en {ball_model_path}; se usa solo el modelo principal")
         
         # Parámetros guardados para reinicializar módulos
         self.tracker_params = {
@@ -206,8 +238,13 @@ class BatchProcessor:
         self.field_calibrator: Optional[FieldCalibrator] = None
         self.spatial_tracker: Optional[SpatialPossessionTracker] = None
 
-        # Módulo de optical flow (NEW)
+        # Módulos de optical flow y smoothing (NEW)
         self.optical_flow_tracker: Optional['OpticalFlowTracker'] = None
+        self.position_smoother: Optional['KalmanFilterPositionSmoother'] = None
+        self.trajectory_validator: Optional['TrajectoryValidator'] = None
+
+        # Filtro robusto de balón (NEW)
+        self.ball_tracker: Optional['BallTracker'] = None
 
         # Sistema de alertas tácticas
         self.alert_system: Optional[MatchAlertSystem] = None
@@ -252,6 +289,10 @@ class BatchProcessor:
                 # Aquí restaurarías el modelo KMeans si lo guardaste
                 pass
         
+        # 2.5. Filtro robusto de balón
+        self.ball_tracker = BallTracker(min_confidence=self.ball_conf_threshold)
+        print(f"✓ Ball Tracker inicializado (conf balón ≥ {self.ball_conf_threshold:.2f}, gating + Kalman)")
+
         # 3. Possession Tracker
         # PossessionTrackerV2 solo necesita fps, que se pasa al llamar a update()
         self.possession_tracker = PossessionTrackerV2()
@@ -274,10 +315,17 @@ class BatchProcessor:
         if self.enable_spatial_tracking:
             print("✓ Inicializando calibración automática de campo (YOLO Custom)...")
             
-            # Detector de keypoints con modelo YOLO custom
+            # Detector de keypoints con modelo YOLO custom.
+            # Se prefiere el modelo refinado para baja calidad si existe
+            # (entrenado con scripts/train_field_keypoints.py).
+            import os
+            kp_model_path = "weights/field_kp_merged_fast/weights/best.pt"
+            if os.path.exists("weights/field_kp_lowq.pt"):
+                kp_model_path = "weights/field_kp_lowq.pt"
+                print("  ℹ Usando modelo de keypoints refinado para baja calidad")
             try:
                 self.keypoints_detector = FieldKeypointsYOLO(
-                    model_path="weights/field_kp_merged_fast/weights/best.pt",
+                    model_path=kp_model_path,
                     confidence_threshold=0.25,
                     device="cuda" if torch.cuda.is_available() else "cpu"
                 )
@@ -341,6 +389,12 @@ class BatchProcessor:
                 self.camera_motion_detector = None
                 print(f"  - Optical Flow Tracker: ✗ Desactivado (para rendimiento)")
 
+            # Kalman smoothing: Siempre habilitado (es muy rápido)
+            self.position_smoother = KalmanFilterPositionSmoother()
+            self.trajectory_validator = TrajectoryValidator(fps=fps)
+
+            print(f"  - Position Smoother (Kalman Filter): ✓ Activado")
+            print(f"  - Trajectory Validator: ✓ Activado")
             print(f"  - Modelo de zonas: {self.spatial_params['zone_partition_type']}")
             print(f"  - Número de zonas: {zone_model.num_zones}")
             print(f"  - Heatmaps: {'Activados' if self.spatial_params['enable_heatmaps'] else 'Desactivados'}")
@@ -607,15 +661,39 @@ class BatchProcessor:
         best_homography_num_kp = 0  # Número de keypoints de la mejor homografía
         best_frame_keypoints = None  # Keypoints del frame con mejor homografía
         
-        # Inferencia YOLO por batch (más rápida que frame a frame en GPU)
+        # Inferencia YOLO por batch (más rápida que frame a frame en GPU).
+        # Se infiere con el umbral del balón (más bajo) y luego se filtra por
+        # clase: el resto de clases mantienen conf_threshold.
         yolo_results = self.model.predict(
             frames,
-            conf=self.conf_threshold,
+            conf=self.ball_conf_threshold,
             iou=self.iou_threshold,
             imgsz=self.imgsz,
             verbose=False,
             device=self.device
         )
+
+        # Detector dedicado de balón: pasada adicional a mayor resolución.
+        # El balón mide ~8px a imgsz=640; a 1280 es detectable de forma fiable.
+        # Para no frenar el pipeline: FP16 y solo 1 de cada ball_frame_stride
+        # frames (el BallTracker interpola los intermedios).
+        ball_results_by_idx = {}
+        if self.ball_model is not None:
+            ball_frame_indices = list(range(0, len(frames), self.ball_frame_stride))
+            try:
+                subset_results = self.ball_model.predict(
+                    [frames[j] for j in ball_frame_indices],
+                    conf=self.ball_conf_threshold,
+                    iou=self.iou_threshold,
+                    imgsz=self.ball_imgsz,
+                    half=True,
+                    verbose=False,
+                    device=self.device
+                )
+                ball_results_by_idx = dict(zip(ball_frame_indices, subset_results))
+            except Exception as e:
+                print(f"⚠ Error en detector de balón (se continúa sin él): {e}")
+                ball_results_by_idx = {}
 
         keypoint_detection_interval = 6  # Menos frecuencia para reducir coste de inferencia de keypoints
 
@@ -629,20 +707,38 @@ class BatchProcessor:
             # 1. DETECCIÓN YOLO
             results = yolo_results[i]
             
-            # Parsear detecciones
+            # Parsear detecciones (umbral por clase: balón más permisivo,
+            # sus falsos positivos los filtra el BallTracker)
             boxes = []
             scores = []
             cls_ids = []
-            
+            ball_candidates = []  # [(bbox, conf)] crudos para el BallTracker
+
             if results.boxes is not None and len(results.boxes) > 0:
                 boxes_data = results.boxes.xyxy.cpu().numpy()
                 scores_data = results.boxes.conf.cpu().numpy()
                 cls_data = results.boxes.cls.cpu().numpy().astype(int)
-                
+
                 for box, score, cls_id in zip(boxes_data, scores_data, cls_data):
+                    if cls_id == 1:  # ball
+                        ball_candidates.append((box, float(score)))
+                        # Al tracker ReID solo pasan balones con confianza plena
+                        if score < self.conf_threshold:
+                            continue
+                    elif score < self.conf_threshold:
+                        continue
                     boxes.append(box)
                     scores.append(score)
                     cls_ids.append(cls_id)
+
+            # Candidatos del detector dedicado de balón (clase única: ball).
+            # Se suman a los del modelo principal; el BallTracker fusiona
+            # hipótesis duplicadas y elige la trayectoria más consistente.
+            bres = ball_results_by_idx.get(i)
+            if bres is not None and bres.boxes is not None and len(bres.boxes) > 0:
+                for bbox, bconf in zip(bres.boxes.xyxy.cpu().numpy(),
+                                       bres.boxes.conf.cpu().numpy()):
+                    ball_candidates.append((bbox, float(bconf)))
             
             boxes = np.array(boxes) if boxes else np.empty((0, 4))
             scores = np.array(scores) if scores else np.array([])
@@ -684,6 +780,15 @@ class BatchProcessor:
             if self.use_keypoints and self.keypoints_detector is not None and frame_idx % keypoint_detection_interval == 0:
                 try:
                     current_keypoints = self.keypoints_detector.detect_keypoints(frame)
+                    # Diagnóstico periódico del filtro de línea blanca
+                    if frame_idx > 0 and frame_idx % 900 == 0:
+                        s = self.keypoints_detector.white_line_stats
+                        total = s['accepted'] + s['rejected']
+                        if total > 0:
+                            print(f"[Keypoints] frame {frame_idx}: filtro línea blanca "
+                                  f"rechaza {s['rejected']}/{total} ({100*s['rejected']/total:.0f}%), "
+                                  f"{s['rejected_yellow']} por amarillo, "
+                                  f"filtro omitido en {s['filter_skipped_frames']} frames (<4 kp)")
                 except Exception as e:
                     if frame_idx % 60 == 0:
                         print(f"[Keypoints] Error frame {frame_idx}: {e}")
@@ -698,12 +803,23 @@ class BatchProcessor:
             ball_owner_team = -1
             ball_owner_id = -1
             ball_bbox = None
-            
-            # Encontrar el balón
-            for obj in tracked_objects:
-                if obj['class_name'] == 'ball':
-                    ball_bbox = obj['bbox']
-                    break
+            # Posiciones de campo proyectadas de TODOS los jugadores este frame
+            # (se rellena en el bloque espacial; habilita métricas físicas)
+            frame_field_positions = {}
+
+            # Encontrar el balón: filtro robusto (validación geométrica,
+            # gating temporal con Kalman y predicción en oclusiones cortas)
+            if self.ball_tracker is not None:
+                ball_result = self.ball_tracker.update(ball_candidates, frame_idx)
+                if ball_result is not None:
+                    ball_bbox = ball_result[0]
+
+            # Fallback: track de balón del ReID tracker (comportamiento previo)
+            if ball_bbox is None:
+                for obj in tracked_objects:
+                    if obj['class_name'] == 'ball':
+                        ball_bbox = obj['bbox']
+                        break
             
             # Encontrar el jugador más cercano al balón
             if ball_bbox is not None:
@@ -843,8 +959,10 @@ class BatchProcessor:
                                     try:
                                         proj = project_points(H, np.array([[foot_x, foot_y]], dtype=np.float32))[0]
                                         if not np.isnan(proj).any() and 0 <= proj[0] <= FIELD_LENGTH and 0 <= proj[1] <= FIELD_WIDTH:
-                                            field_pos = proj
-                                            confidence = 1.0
+                                            is_valid, _ = self.trajectory_validator.validate(track_id, proj, frame_idx)
+                                            if is_valid:
+                                                field_pos = proj
+                                                confidence = 1.0
                                     except Exception:
                                         pass
 
@@ -855,8 +973,10 @@ class BatchProcessor:
                                             np.array([[foot_x, foot_y]], dtype=np.float32)
                                         )[0]
                                         if not np.isnan(proj).any() and 0 <= proj[0] <= FIELD_LENGTH and 0 <= proj[1] <= FIELD_WIDTH:
-                                            field_pos = proj
-                                            confidence = 0.85
+                                            is_valid, _ = self.trajectory_validator.validate(track_id, proj, frame_idx)
+                                            if is_valid:
+                                                field_pos = proj
+                                                confidence = 0.85
                                     except Exception:
                                         pass
 
@@ -876,8 +996,10 @@ class BatchProcessor:
                                     if tri_coords is not None and len(tri_coords) > 0:
                                         proj = tri_coords[0]
                                         if not np.isnan(proj).any() and 0 <= proj[0] <= FIELD_LENGTH and 0 <= proj[1] <= FIELD_WIDTH:
-                                            field_pos = proj
-                                            confidence = 0.55
+                                            is_valid, _ = self.trajectory_validator.validate(track_id, proj, frame_idx)
+                                            if is_valid:
+                                                field_pos = proj
+                                                confidence = 0.55
 
                                 if field_pos is None and track_id in of_fallback:
                                     of_pos_px = of_fallback[track_id]
@@ -888,7 +1010,12 @@ class BatchProcessor:
                                     ])
                                     confidence = of_confidence * 0.4
 
+                                # Aplicar Kalman smoothing si tenemos posición
                                 if self._is_valid_for_heatmap(field_pos):
+                                    field_pos = self.position_smoother.smooth(
+                                        track_id, field_pos, confidence, is_detected=True
+                                    )
+
                                     # Acumular presencia zonal por equipo para top-zonas UI.
                                     # Esto corrige sesgos del tracker espacial legacy y usa datos proyectados por jugador.
                                     if team_id in (0, 1):
@@ -913,6 +1040,9 @@ class BatchProcessor:
                                     # Acumular posición PROYECTADA (en coordenadas de campo)
                                     player_field_positions_accumulator[track_id]['field_positions'].append(
                                         (field_pos[0], field_pos[1])
+                                    )
+                                    frame_field_positions[track_id] = (
+                                        float(field_pos[0]), float(field_pos[1])
                                     )
                     
                     except Exception as e:
@@ -998,10 +1128,13 @@ class BatchProcessor:
                                    (obj['bbox'][1] + obj['bbox'][3]) / 2]
                     }
                     
-                    # Añadir posición de campo si está disponible y es el poseedor
-                    if (self.enable_spatial_tracking and 
-                        obj['track_id'] == ball_owner_id and 
-                        spatial_info.get('field_position') is not None):
+                    # Posición de campo proyectada (todos los jugadores con
+                    # proyección válida este frame, no solo el poseedor)
+                    if obj['track_id'] in frame_field_positions:
+                        pos_data['field_position'] = list(frame_field_positions[obj['track_id']])
+                    elif (self.enable_spatial_tracking and
+                          obj['track_id'] == ball_owner_id and
+                          spatial_info.get('field_position') is not None):
                         pos_data['field_position'] = spatial_info['field_position']
                         pos_data['zone_id'] = spatial_info.get('zone_id', -1)
                     
@@ -1044,12 +1177,10 @@ class BatchProcessor:
                         # Clipping
                         ix = np.clip(ix, 0, self.heatmap_accumulator.nx - 1)
                         iy = np.clip(iy, 0, self.heatmap_accumulator.ny - 1)
-                        
-                        # Acumular
-                        if team_id == 0:
-                            self.heatmap_accumulator.counts_team0[iy, ix] += 1
-                        elif team_id == 1:
-                            self.heatmap_accumulator.counts_team1[iy, ix] += 1
+
+                        # Acumular (total + ventana temporal para heatmaps por franjas)
+                        batch_ts = (start_frame_idx + len(frames) / 2.0) / fps if fps > 0 else None
+                        self.heatmap_accumulator.add_at(team_id, iy, ix, batch_ts)
                     
                     # Incrementar contador de frames una sola vez por batch
                     self.heatmap_accumulator.num_frames += 1
@@ -1465,7 +1596,26 @@ def export_spatial_heatmaps(processor: BatchProcessor,
         save_data['team_0_heatmap_flip'] = heatmap_flip_0
         save_data['team_1_heatmap_flip'] = heatmap_flip_1
         save_data['heatmap_flip_frames'] = processor.heatmap_accumulator.num_frames
-    
+
+    # Heatmaps por ventanas temporales (para consultas por franjas de minutos)
+    if processor.heatmap_accumulator is not None:
+        acc = processor.heatmap_accumulator
+        windows_0 = acc.get_heatmap_windows(0)
+        windows_1 = acc.get_heatmap_windows(1)
+        if windows_0 is not None and windows_1 is not None:
+            # Igualar longitudes (un equipo puede tener más ventanas)
+            t = max(windows_0.shape[0], windows_1.shape[0])
+            if windows_0.shape[0] < t:
+                pad = np.zeros((t - windows_0.shape[0], acc.ny, acc.nx), dtype=np.float32)
+                windows_0 = np.concatenate([windows_0, pad], axis=0)
+            if windows_1.shape[0] < t:
+                pad = np.zeros((t - windows_1.shape[0], acc.ny, acc.nx), dtype=np.float32)
+                windows_1 = np.concatenate([windows_1, pad], axis=0)
+            save_data['team_0_heatmap_windows'] = windows_0
+            save_data['team_1_heatmap_windows'] = windows_1
+            save_data['window_seconds'] = acc.window_seconds
+            save_data['num_windows'] = t
+
     np.savez(output_path, **save_data)
     
     print(f"✓ Heatmaps guardados en: {output_path}")

@@ -31,3 +31,10 @@ class StorageProvider(ABC):
     def generate_upload_signed_url(self, destination_name: str, expiration_seconds: int = 900) -> tuple[str, str]:
         raise NotImplementedError("Signed URLs not supported by this storage provider")
 
+    def open_writer(self, destination_name: str):
+        """Contexto que da un objeto con `.write(bytes)` y expone `.uri` al
+        cerrarse, para subir por trozos sin cargar el archivo entero en
+        memoria (vídeos de varios GB). Por defecto no soportado; los
+        providers que sí lo soporten (Local, GCS) lo sobrescriben."""
+        raise NotImplementedError("Streaming upload not supported by this storage provider")
+

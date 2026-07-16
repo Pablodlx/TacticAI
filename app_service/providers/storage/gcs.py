@@ -1,3 +1,4 @@
+import contextlib
 import datetime
 import time
 
@@ -56,6 +57,17 @@ class GCSStorageProvider(StorageProvider):
         blob = bucket.blob(destination_name)
         blob.upload_from_string(text, content_type="application/json")
         return f"gs://{self.output_bucket}/{destination_name}"
+
+    @contextlib.contextmanager
+    def open_writer(self, destination_name: str):
+        bucket = self.client.bucket(self.input_bucket)
+        blob = bucket.blob(destination_name)
+        uri = f"gs://{self.input_bucket}/{destination_name}"
+        # blob.open("wb") hace un resumable upload por trozos sin cargar
+        # el archivo entero en memoria del proceso.
+        with blob.open("wb") as f:
+            f.uri = uri  # exponer .uri como en el writer local
+            yield f
 
     def generate_upload_signed_url(self, destination_name: str, expiration_seconds: int = 900) -> tuple[str, str]:
         # Cloud Run credentials (Compute Engine) have no private key, so we

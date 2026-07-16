@@ -1,5 +1,6 @@
 from app_service.services.factory import build_analysis_runner, build_queue, build_session, build_storage
 from app_service.services.jobs import JobService
+from app_service.services.matches import MatchIngestService
 from app_service.config import get_settings
 
 
@@ -15,6 +16,7 @@ def run_worker() -> None:
         queue=queue,
         analysis_runner=analysis_runner,
         local_workspace=f"{settings.local_storage_path}/workspace",
+        match_ingest=MatchIngestService(db_session_factory=session_factory, storage=storage),
     )
     queue.consume_forever(service.process_payload)
 

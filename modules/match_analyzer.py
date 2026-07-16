@@ -39,6 +39,12 @@ class AnalysisConfig:
     device: str = "cuda"
     conf_threshold: float = 0.3
     imgsz: int = 640
+    # Detector dedicado de balón (entrenado con scripts/train_ball_detector.py).
+    # Si el archivo existe, se usa como fuente adicional de candidatos de balón
+    # a mayor resolución. None o inexistente → solo el modelo principal.
+    ball_model_path: Optional[str] = "weights/ball_detector.pt"
+    ball_imgsz: int = 1280
+    ball_frame_stride: int = 2  # inferir balón 1 de cada N frames
     
     # Tracker
     max_age: int = 30
@@ -160,6 +166,9 @@ def run_match_analysis(
                 device=config.device,
                 conf_threshold=config.conf_threshold,
                 imgsz=config.imgsz,
+                ball_model_path=config.ball_model_path,
+                ball_imgsz=config.ball_imgsz,
+                ball_frame_stride=config.ball_frame_stride,
                 max_age=config.max_age,
                 max_lost_time=config.max_lost_time,
                 kmeans_min_tracks=config.kmeans_min_tracks,
@@ -220,6 +229,11 @@ def run_match_analysis(
                         send_visualization=send_viz if config.on_frame_visualized else None
                     )
                     
+                    # Acumular alertas del chunk en el estado (para summary/partials)
+                    chunk_alerts = chunk_output.chunk_stats.get('alerts') or []
+                    if chunk_alerts:
+                        match_state.metadata.setdefault('alerts', []).extend(chunk_alerts)
+
                     # Guardar outputs
                     save_chunk_output(match_id, chunk_output, config.output_dir)
                     

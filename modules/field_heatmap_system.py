@@ -597,7 +597,8 @@ class HeatmapAccumulator:
         field_length: float = FIELD_LENGTH,
         field_width: float = FIELD_WIDTH,
         nx: int = 105,
-        ny: int = 68
+        ny: int = 68,
+        window_seconds: float = 300.0
     ):
         """
         Args:
@@ -605,18 +606,52 @@ class HeatmapAccumulator:
             field_width: Ancho del campo (metros)
             nx: Número de celdas en eje X
             ny: Número de celdas en eje Y
+            window_seconds: Tamaño de las ventanas temporales del heatmap
+                (permite consultar mapas de calor por franjas de minutos)
         """
         self.field_length = field_length
         self.field_width = field_width
         self.nx = nx
         self.ny = ny
-        
-        # Matrices de conteo por equipo
+        self.window_seconds = window_seconds
+
+        # Matrices de conteo por equipo (acumulado total)
         self.counts_team0 = np.zeros((ny, nx), dtype=np.float32)
         self.counts_team1 = np.zeros((ny, nx), dtype=np.float32)
-        
+
+        # Acumulación por ventanas temporales: {team_id: [array (ny,nx), ...]}
+        self.window_counts = {0: [], 1: []}
+
         # Contador de frames procesados
         self.num_frames = 0
+
+    def _window_index(self, ts_seconds: float, team_id: int) -> int:
+        """Índice de la ventana para un timestamp, con crecimiento dinámico."""
+        idx = max(0, int(ts_seconds / self.window_seconds))
+        windows = self.window_counts[team_id]
+        while len(windows) <= idx:
+            windows.append(np.zeros((self.ny, self.nx), dtype=np.float32))
+        return idx
+
+    def add_at(self, team_id: int, iy: int, ix: int, ts_seconds: float = None):
+        """Acumula una presencia en la celda (iy, ix) del total y, si hay
+        timestamp, también en su ventana temporal."""
+        if team_id == 0:
+            self.counts_team0[iy, ix] += 1
+        elif team_id == 1:
+            self.counts_team1[iy, ix] += 1
+        else:
+            return
+        if ts_seconds is not None:
+            idx = self._window_index(ts_seconds, team_id)
+            self.window_counts[team_id][idx][iy, ix] += 1
+
+    def get_heatmap_windows(self, team_id: int) -> Optional[np.ndarray]:
+        """Devuelve array (T, ny, nx) con el heatmap crudo por ventana."""
+        windows = self.window_counts.get(team_id)
+        if not windows:
+            return None
+        return np.stack(windows, axis=0)
     
     def add_frame(
         self,

@@ -10,6 +10,7 @@ están correctamente conectados entre sí.
 
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -41,9 +42,32 @@ def _migrate_test_db(tmp_path: Path):
     subprocess.run(["./scripts/db_manage.sh", "upgrade"], check=True, env=env)
 
 
+def _auth_headers(client) -> dict:
+    """Registra un usuario de test y devuelve headers con su access token."""
+    r = client.post(
+        "/auth/register",
+        json={"email": "it@test.com", "password": "password123"},
+    )
+    assert r.status_code == 201, r.text
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
 def _minimal_mp4() -> bytes:
     """Bytes sintéticos que simulan un pequeño archivo MP4."""
     return b"\x00\x00\x00\x1cftypisom\x00\x00\x00\x00isomavc1" + b"\x00" * 128
+
+
+def _wait_for_status(client, headers, job_id, timeout_s=5.0) -> dict:
+    """El análisis corre en un hilo aparte (create_job responde al instante);
+    se espera con un poll corto a que termine, igual que el frontend real."""
+    deadline = time.time() + timeout_s
+    payload = {}
+    while time.time() < deadline:
+        payload = client.get(f"/jobs/{job_id}", headers=headers).json()
+        if payload.get("status") in ("completed", "failed"):
+            return payload
+        time.sleep(0.05)
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -59,10 +83,11 @@ def test_worker_job_lifecycle_pending_to_completed(tmp_path, monkeypatch):
     _migrate_test_db(tmp_path)
     app = create_app()
     client = TestClient(app)
+    headers = _auth_headers(client)
 
     # Subir vídeo
     upload = client.post(
-        "/jobs/upload",
+"/jobs/upload", headers=headers,
         files={"file": ("match.mp4", _minimal_mp4(), "video/mp4")},
     )
     assert upload.status_code == 200
@@ -77,15 +102,13 @@ def test_worker_job_lifecycle_pending_to_completed(tmp_path, monkeypatch):
         raising=True,
     )
 
-    # Crear y procesar job (sync → se procesa en la misma llamada)
-    create = client.post("/jobs", json={"input_uri": input_uri})
+    # Crear job (se procesa en un hilo aparte) y esperar a que termine
+    create = client.post("/jobs", headers=headers, json={"input_uri": input_uri})
     assert create.status_code == 200
     job_id = create.json()["job_id"]
 
-    # Verificar estado final
-    status = client.get(f"/jobs/{job_id}")
-    assert status.status_code == 200
-    assert status.json()["status"] == "completed"
+    payload = _wait_for_status(client, headers, job_id)
+    assert payload.get("status") == "completed", payload
 
 
 def test_worker_job_stores_timestamps(tmp_path, monkeypatch):
@@ -94,9 +117,10 @@ def test_worker_job_stores_timestamps(tmp_path, monkeypatch):
     _migrate_test_db(tmp_path)
     app = create_app()
     client = TestClient(app)
+    headers = _auth_headers(client)
 
     upload = client.post(
-        "/jobs/upload",
+"/jobs/upload", headers=headers,
         files={"file": ("clip.mp4", _minimal_mp4(), "video/mp4")},
     )
     input_uri = upload.json()["input_uri"]
@@ -109,10 +133,11 @@ def test_worker_job_stores_timestamps(tmp_path, monkeypatch):
         raising=True,
     )
 
-    create = client.post("/jobs", json={"input_uri": input_uri})
+    create = client.post("/jobs", headers=headers, json={"input_uri": input_uri})
     job_id = create.json()["job_id"]
 
-    payload = client.get(f"/jobs/{job_id}").json()
+    payload = _wait_for_status(client, headers, job_id)
+    assert payload.get("status") == "completed", payload
     assert payload["started_at"] is not None
     assert payload["finished_at"] is not None
 
@@ -123,8 +148,9 @@ def test_worker_unknown_job_returns_404(tmp_path):
     _migrate_test_db(tmp_path)
     app = create_app()
     client = TestClient(app)
+    headers = _auth_headers(client)
 
-    resp = client.get("/jobs/nonexistent-job-id-000")
+    resp = client.get("/jobs/nonexistent-job-id-000", headers=headers)
     assert resp.status_code == 404
 
 

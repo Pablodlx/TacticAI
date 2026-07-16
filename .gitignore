@@ -115,3 +115,10 @@ checkpoint.pth
 # Coverage
 .coverage
 htmlcov/
+
+# Datasets locales y runs de entrenamiento
+datasets/
+runs/
+Soccer-Ball-Detection*/
+*.pt
+ROBOFLOW_FIELD_KP/

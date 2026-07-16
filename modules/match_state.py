@@ -247,7 +247,9 @@ class MatchState:
             'tracking': {
                 'active_tracks': len(self.tracker_state.active_tracks),
                 'total_ids': self.tracker_state.next_id
-            }
+            },
+            # Alertas tácticas acumuladas por match_analyzer desde chunk_stats
+            'alerts': self.metadata.get('alerts', [])
         }
         
         # Cachear para queries rápidas
